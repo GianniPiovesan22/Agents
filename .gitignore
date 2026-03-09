@@ -1,0 +1,36 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Environment & Secrets
+.env
+.env.local
+.env.production
+service-account.json
+client_secret.json
+
+# Binaries
+gog.zip
+gog-bin/*.exe
+gog-bin/gog
+
+# Database
+*.db
+*.db-journal
+
+# Temp files
+tmp/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Logs
+*.log
+npm-debug.log*

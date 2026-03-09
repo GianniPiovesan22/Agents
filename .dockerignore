@@ -1,0 +1,10 @@
+node_modules
+dist
+*.db
+.env
+.git
+.gitignore
+*.zip
+*.webp
+*.png
+*.jpg
