@@ -424,80 +424,28 @@ async function openRouterCompletion(messages: Message[], tools?: Tool[]): Promis
 
 // ── Main Completion ────────────────────────────────────────────
 export async function getCompletion(messages: Message[], tools?: Tool[]): Promise<CompletionResult> {
-    const tier = classifyComplexity(messages);
-    const isComplex = tier === 'pro' || tier === 'ultra';
-
     return await pRetry(async () => {
-        if (isComplex) {
-            // Complex tasks: Anthropic → Gemini → Groq → OpenRouter
-            if (anthropicClient) {
-                try {
-                    return await anthropicCompletion(messages, tools);
-                } catch (error: any) {
-                    if (error.name === 'AbortError' || error.name === 'TimeoutError') {
-                        throw new AbortError(`LLM timeout after ${config.LLM_TIMEOUT_MS}ms (Anthropic)`);
-                    }
-                    console.error('⚠️ Anthropic error, falling back to Gemini:', error?.message || error);
-                }
-            }
-            if (geminiClient) {
-                try {
-                    return await geminiCompletion(messages, tools);
-                } catch (error: any) {
-                    if (error.name === 'AbortError' || error.name === 'TimeoutError') {
-                        throw new AbortError(`LLM timeout after ${config.LLM_TIMEOUT_MS}ms (Gemini)`);
-                    }
-                    console.error('⚠️ Gemini error, falling back to Groq:', error?.message || error);
-                }
-            }
-        } else {
-            // Fast tasks: Groq → OpenRouter → Gemini → Anthropic
+        // Primary: Anthropic (Claude)
+        if (anthropicClient) {
             try {
-                return await groqCompletion(messages, tools);
+                return await anthropicCompletion(messages, tools);
             } catch (error: any) {
                 if (error.name === 'AbortError' || error.name === 'TimeoutError') {
-                    throw new AbortError(`LLM timeout after ${config.LLM_TIMEOUT_MS}ms (Groq)`);
+                    throw new AbortError(`LLM timeout after ${config.LLM_TIMEOUT_MS}ms (Anthropic)`);
                 }
-                console.error('⚠️ Groq error, falling back to OpenRouter:', error?.message || error);
-            }
-            try {
-                return await openRouterCompletion(messages, tools);
-            } catch (error: any) {
-                if (error.name === 'AbortError' || error.name === 'TimeoutError') {
-                    throw new AbortError(`LLM timeout after ${config.LLM_TIMEOUT_MS}ms (OpenRouter)`);
-                }
-                console.error('⚠️ OpenRouter error, falling back to Gemini:', error?.message || error);
-            }
-            if (geminiClient) {
-                try {
-                    return await geminiCompletion(messages, tools);
-                } catch (error: any) {
-                    if (error.name === 'AbortError' || error.name === 'TimeoutError') {
-                        throw new AbortError(`LLM timeout after ${config.LLM_TIMEOUT_MS}ms (Gemini)`);
-                    }
-                    console.error('⚠️ Gemini error, falling back to Anthropic:', error?.message || error);
-                }
+                console.error('⚠️ Anthropic error, falling back to OpenRouter:', error?.message || error);
             }
         }
 
-        // Last resort: Groq → OpenRouter (shared tail for complex path)
+        // Fallback: OpenRouter
         try {
-            console.log(`⚡ Model: groq/llama-3.3-70b (last resort)`);
-            return await groqCompletion(messages, tools);
-        } catch (error: any) {
-            if (error.name === 'AbortError' || error.name === 'TimeoutError') {
-                throw new AbortError(`LLM timeout after ${config.LLM_TIMEOUT_MS}ms (Groq)`);
+            return await openRouterCompletion(messages, tools);
+        } catch (lastError: any) {
+            if (lastError.name === 'AbortError' || lastError.name === 'TimeoutError') {
+                throw new AbortError(`LLM timeout after ${config.LLM_TIMEOUT_MS}ms (OpenRouter)`);
             }
-            console.error('⚠️ Groq API error, falling back to OpenRouter:', error?.message || error);
-            try {
-                return await openRouterCompletion(messages, tools);
-            } catch (lastError: any) {
-                if (lastError.name === 'AbortError' || lastError.name === 'TimeoutError') {
-                    throw new AbortError(`LLM timeout after ${config.LLM_TIMEOUT_MS}ms (OpenRouter)`);
-                }
-                console.error('❌ OpenRouter API error:', lastError);
-                throw lastError;
-            }
+            console.error('❌ OpenRouter error:', lastError);
+            throw lastError;
         }
     }, { retries: 2 });
 }
