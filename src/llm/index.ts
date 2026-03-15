@@ -2,10 +2,15 @@ import Groq from 'groq-sdk';
 import { GoogleGenAI, Type } from '@google/genai';
 import { config } from '../config/index.js';
 import OpenAI from 'openai';
+import Anthropic from '@anthropic-ai/sdk';
 import pRetry, { AbortError } from 'p-retry';
 
 // ── Providers ──────────────────────────────────────────────────
 const groq = new Groq({ apiKey: config.GROQ_API_KEY });
+
+const anthropicClient = config.ANTHROPIC_API_KEY
+    ? new Anthropic({ apiKey: config.ANTHROPIC_API_KEY })
+    : null;
 const openRouter = new OpenAI({
     baseURL: "https://openrouter.ai/api/v1",
     apiKey: config.OPENROUTER_API_KEY,
@@ -233,6 +238,50 @@ async function geminiCompletion(messages: Message[], tools?: Tool[], modelOverri
     return { content: textContent, tool_calls: toolCalls };
 }
 
+// ── Claude Completion ──────────────────────────────────────────
+async function claudeCompletion(messages: Message[], tools?: Tool[]): Promise<CompletionResult> {
+    if (!anthropicClient) throw new Error('Anthropic not configured');
+
+    const systemMsg = messages.find(m => m.role === 'system');
+    const cleanMessages = messages
+        .filter(m => m.role !== 'system')
+        .map(m => ({
+            role: (m.role === 'model' ? 'assistant' : m.role) as 'user' | 'assistant',
+            content: m.content,
+        }));
+
+    const anthropicTools = tools?.map(t => ({
+        name: t.function.name,
+        description: t.function.description,
+        input_schema: t.function.parameters as any,
+    }));
+
+    const response = await anthropicClient.messages.create({
+        model: 'claude-sonnet-4-6',
+        max_tokens: 4096,
+        system: systemMsg?.content,
+        messages: cleanMessages,
+        ...(anthropicTools && anthropicTools.length > 0 ? { tools: anthropicTools } : {}),
+    });
+
+    const toolCalls: ToolCallResult[] = [];
+    let textContent: string | null = null;
+
+    for (const block of response.content) {
+        if (block.type === 'text') {
+            textContent = block.text;
+        } else if (block.type === 'tool_use') {
+            toolCalls.push({
+                id: block.id,
+                name: block.name,
+                arguments: block.input as any,
+            });
+        }
+    }
+
+    return { content: textContent, tool_calls: toolCalls };
+}
+
 // ── Groq Completion (fallback) ─────────────────────────────────
 async function groqCompletion(messages: Message[], tools?: Tool[]): Promise<CompletionResult> {
     const cleanMessages = messages.map(m => {
@@ -314,7 +363,24 @@ async function openRouterCompletion(messages: Message[], tools?: Tool[]): Promis
 // ── Main Completion ────────────────────────────────────────────
 export async function getCompletion(messages: Message[], tools?: Tool[]): Promise<CompletionResult> {
     return await pRetry(async () => {
-        if (geminiClient) {
+        const tier = classifyComplexity(messages);
+        const useClaudeForThisRequest = anthropicClient && (tier === 'pro' || tier === 'ultra');
+
+        // Claude for complex requests only
+        if (useClaudeForThisRequest) {
+            try {
+                console.log(`🧠 Model: claude-sonnet-4-6 (tier: ${tier})`);
+                return await claudeCompletion(messages, tools);
+            } catch (error: any) {
+                if (error.name === 'AbortError' || error.name === 'TimeoutError') {
+                    throw new AbortError(`LLM timeout after ${config.LLM_TIMEOUT_MS}ms (Claude)`);
+                }
+                console.error('⚠️ Claude error, falling back to Groq:', error?.message || error);
+            }
+        }
+
+        // Gemini for medium complexity (if configured)
+        if (geminiClient && tier !== 'fast') {
             try {
                 return await geminiCompletion(messages, tools);
             } catch (error: any) {
@@ -325,7 +391,9 @@ export async function getCompletion(messages: Message[], tools?: Tool[]): Promis
             }
         }
 
+        // Groq for fast/simple requests (default)
         try {
+            console.log(`⚡ Model: groq/llama-3.3-70b (tier: ${tier})`);
             return await groqCompletion(messages, tools);
         } catch (error: any) {
             if (error.name === 'AbortError' || error.name === 'TimeoutError') {
