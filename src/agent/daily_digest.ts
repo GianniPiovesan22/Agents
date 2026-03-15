@@ -49,19 +49,23 @@ Haz que suene coloquial, cálido y enfocado al éxito del día.
         if (!response.content) return;
 
         // 4. Generar Voz y Enviar a todos los administradores (allowed users)
-        const audioPath = await textToSpeech(response.content);
-        const { InputFile } = await import('grammy');
+        let audioPath: string | null = null;
+        try {
+            audioPath = await textToSpeech(response.content);
+            const { InputFile } = await import('grammy');
 
-        for (const userId of config.TELEGRAM_ALLOWED_USER_IDS) {
-            try {
-                await bot.api.sendVoice(userId, new InputFile(audioPath), { caption: "🌅 Tu Resumen Diario (Daily Digest)" });
-            } catch (telegramErr) {
-                console.error(`Error enviando digest al user ${userId}`, telegramErr);
+            for (const userId of config.TELEGRAM_ALLOWED_USER_IDS) {
+                try {
+                    await bot.api.sendVoice(userId, new InputFile(audioPath), { caption: "🌅 Tu Resumen Diario (Daily Digest)" });
+                } catch (telegramErr) {
+                    console.error(`Error enviando digest al user ${userId}`, telegramErr);
+                }
+            }
+        } finally {
+            if (audioPath && fs.existsSync(audioPath)) {
+                fs.unlinkSync(audioPath);
             }
         }
-
-        // clean temp file
-        if (fs.existsSync(audioPath)) fs.unlinkSync(audioPath);
 
     } catch (error) {
         console.error("Error en Daily Digest:", error);

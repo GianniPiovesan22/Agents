@@ -1,6 +1,9 @@
 import { registerTool } from './index.js';
 import { exec } from 'child_process';
 import util from 'util';
+import path from 'path';
+import fs from 'fs';
+import { config } from '../config/index.js';
 
 const execPromise = util.promisify(exec);
 
@@ -14,6 +17,9 @@ const ALLOWED_COMMANDS = [
 
 // Block dangerous shell operators that could chain commands
 const DANGEROUS_PATTERNS = /[;&|`$(){}[\]<>!\\]|(\bsudo\b)|(\brm\b)|(\bdel\b)|(\bformat\b)|(\bshutdown\b)|(\breboot\b)|(\bkill\b)|(\btaskkill\b)|(\bpowershell\b)|(\bcmd\b)|(\bwget\b)|(\bcurl\b)|(\bnew-object\b)|(\binvoke-\b)|(\bstart-process\b)/i;
+
+// Commands that accept file path arguments and must be sandboxed
+const FILE_READ_COMMANDS = ['cat', 'type', 'head', 'tail'];
 
 registerTool({
     definition: {
@@ -44,6 +50,27 @@ registerTool({
             // Security: Block dangerous shell operators and patterns
             if (DANGEROUS_PATTERNS.test(args.command)) {
                 return '🚫 Comando bloqueado: contiene operadores o patrones potencialmente peligrosos.';
+            }
+
+            // Security: Sandbox path validation for file-read commands
+            if (FILE_READ_COMMANDS.includes(baseCmd)) {
+                const sandboxDir = path.resolve(config.TERMINAL_SANDBOX_DIR);
+
+                // Ensure sandbox directory exists at runtime
+                if (!fs.existsSync(sandboxDir)) {
+                    fs.mkdirSync(sandboxDir, { recursive: true });
+                }
+
+                // Extract file argument: first non-flag token after the command
+                const parts = args.command.trim().split(/\s+/);
+                const filePart = parts.slice(1).find((p: string) => !p.startsWith('-'));
+
+                if (filePart) {
+                    const resolvedPath = path.resolve(sandboxDir, filePart);
+                    if (!resolvedPath.startsWith(sandboxDir + path.sep) && resolvedPath !== sandboxDir) {
+                        return `🚫 Acceso denegado: el path '${filePart}' está fuera del sandbox permitido (${sandboxDir}). Solo podés leer archivos dentro de ${sandboxDir}.`;
+                    }
+                }
             }
 
             console.log(`⚠️ EXECUTING TERMINAL COMMAND: ${args.command}`);

@@ -1,4 +1,6 @@
 import express from 'express';
+import crypto from 'crypto';
+import rateLimit from 'express-rate-limit';
 import { config } from '../config/index.js';
 import { getHistory, saveMessage } from '../database/index.js';
 import { runAgent } from '../agent/loop.js';
@@ -108,6 +110,17 @@ function splitMessage(text: string, maxLength: number): string[] {
  * Handle incoming WhatsApp message
  */
 async function handleIncomingMessage(from: string, text: string, messageId: string) {
+    // Whitelist check — must be before any processing
+    const allowedNumbers = config.WHATSAPP_ALLOWED_NUMBERS;
+    if (!allowedNumbers || allowedNumbers.length === 0) {
+        console.warn(`⚠️ WHATSAPP_ALLOWED_NUMBERS not configured — all WhatsApp messages rejected`);
+        return;
+    }
+    if (!allowedNumbers.includes(from)) {
+        console.warn(`⚠️ Unauthorized WhatsApp sender: ${from}`);
+        return;
+    }
+
     console.log(`📱 WhatsApp message from ${from}: ${text}`);
 
     // Mark as read
@@ -143,9 +156,23 @@ async function handleIncomingMessage(from: string, text: string, messageId: stri
  */
 export function createWhatsAppServer() {
     const app = express();
+
+    // TASK-19: Raw body capture for HMAC validation on /webhook route
+    // Must be registered BEFORE express.json() so req.body is a Buffer for the webhook route
+    app.use('/webhook', express.raw({ type: '*/*' }));
     app.use(express.json());
 
     const VERIFY_TOKEN = config.WHATSAPP_VERIFY_TOKEN || 'opengravity_webhook_2026';
+    const APP_SECRET = config.WHATSAPP_APP_SECRET;
+
+    // TASK-22: Rate limiter — applied exclusively to POST /webhook
+    const webhookLimiter = rateLimit({
+        windowMs: 60 * 1000,   // 1 minute window
+        max: 100,              // 100 requests per IP per minute
+        standardHeaders: true, // includes Retry-After header
+        legacyHeaders: false,
+        message: { error: 'Too many requests' },
+    });
 
     // ── Webhook Verification (GET) ─────────────────────────────
     app.get('/webhook', (req, res) => {
@@ -163,13 +190,48 @@ export function createWhatsAppServer() {
     });
 
     // ── Webhook Messages (POST) ────────────────────────────────
-    app.post('/webhook', async (req, res) => {
-        // Always respond 200 quickly to avoid Meta retries
+    // TASK-22: webhookLimiter applied first (rate limit)
+    // TASK-20: HMAC validation inline in handler
+    app.post('/webhook', webhookLimiter, async (req, res) => {
+        // TASK-20: HMAC-SHA256 validation
+        if (!APP_SECRET) {
+            console.error('❌ WHATSAPP_APP_SECRET not configured — rejecting all webhook requests');
+            return res.sendStatus(401);
+        }
+
+        const signature = req.headers['x-hub-signature-256'] as string | undefined;
+        if (!signature) {
+            console.warn('⚠️ Missing x-hub-signature-256 header');
+            return res.sendStatus(401);
+        }
+
+        const rawBody = req.body as Buffer;
+        const expectedSig = 'sha256=' + crypto
+            .createHmac('sha256', APP_SECRET)
+            .update(rawBody)
+            .digest('hex');
+
+        // timingSafeEqual requires equal-length buffers — check lengths first
+        const sigBuffer = Buffer.from(signature);
+        const expectedBuffer = Buffer.from(expectedSig);
+        if (sigBuffer.length !== expectedBuffer.length ||
+            !crypto.timingSafeEqual(sigBuffer, expectedBuffer)) {
+            console.warn('❌ WhatsApp HMAC validation failed');
+            return res.sendStatus(401);
+        }
+
+        // Parse body manually (req.body is Buffer due to express.raw())
+        let body: any;
+        try {
+            body = JSON.parse(rawBody.toString('utf-8'));
+        } catch {
+            return res.sendStatus(400);
+        }
+
+        // Respond 200 quickly to avoid Meta retries
         res.sendStatus(200);
 
         try {
-            const body = req.body;
-
             if (body.object !== 'whatsapp_business_account') return;
 
             const entries = body.entry || [];
@@ -181,7 +243,6 @@ export function createWhatsAppServer() {
                     if (change.field !== 'messages') continue;
 
                     const messages = change.value?.messages || [];
-                    const contacts = change.value?.contacts || [];
 
                     for (const message of messages) {
                         // Only handle text messages for now

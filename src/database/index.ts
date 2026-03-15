@@ -193,8 +193,21 @@ export async function markReminderSent(id: string | number, source: 'firebase' |
 
 export async function saveEmbedding(userId: string, content: string, embedding: number[]) {
   try {
-    const stmt = localDb.prepare('INSERT INTO memory_embeddings (user_id, content, embedding) VALUES (?, ?, ?)');
-    stmt.run(userId, content, JSON.stringify(embedding));
+    const insertStmt = localDb.prepare('INSERT INTO memory_embeddings (user_id, content, embedding) VALUES (?, ?, ?)');
+    insertStmt.run(userId, content, JSON.stringify(embedding));
+
+    // Cleanup: keep only the MEMORY_MAX_EMBEDDINGS most recent embeddings per user
+    const cleanupStmt = localDb.prepare(`
+      DELETE FROM memory_embeddings
+      WHERE user_id = ?
+        AND id NOT IN (
+          SELECT id FROM memory_embeddings
+          WHERE user_id = ?
+          ORDER BY timestamp DESC
+          LIMIT ?
+        )
+    `);
+    cleanupStmt.run(userId, userId, config.MEMORY_MAX_EMBEDDINGS);
   } catch (e) {
     console.error("Local DB Embedding Save Error:", e);
   }
@@ -202,8 +215,8 @@ export async function saveEmbedding(userId: string, content: string, embedding: 
 
 export async function getAllEmbeddings(userId: string): Promise<{ content: string, embedding: number[] }[]> {
   try {
-    const stmt = localDb.prepare('SELECT content, embedding FROM memory_embeddings WHERE user_id = ?');
-    const rows = stmt.all(userId) as any[];
+    const stmt = localDb.prepare('SELECT content, embedding FROM memory_embeddings WHERE user_id = ? ORDER BY timestamp DESC LIMIT ?');
+    const rows = stmt.all(userId, config.MEMORY_MAX_EMBEDDINGS) as any[];
     return rows.map(r => ({
       content: r.content,
       embedding: JSON.parse(r.embedding)

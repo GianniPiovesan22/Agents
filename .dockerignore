@@ -8,3 +8,5 @@ dist
 *.webp
 *.png
 *.jpg
+service-account.json
+client_secret.json

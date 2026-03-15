@@ -15,11 +15,9 @@ RUN npm ci --production=false
 COPY tsconfig.json ./
 COPY src/ ./src/
 
-# Copy required files (optional — bot works without them in degraded mode)
-COPY service-account.json* ./
-COPY client_secret.json* ./
-
 # Copy gog binary
+# NOTE: Credentials are NOT copied into the image. Mount them at runtime:
+# docker run -v ./service-account.json:/app/service-account.json:ro opengravity
 COPY gog-bin/ ./gog-bin/
 RUN chmod +x ./gog-bin/gog.exe 2>/dev/null || chmod +x ./gog-bin/gog 2>/dev/null || true
 
