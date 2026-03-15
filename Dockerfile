@@ -15,9 +15,9 @@ RUN npm ci --production=false
 COPY tsconfig.json ./
 COPY src/ ./src/
 
-# Copy required files
-COPY service-account.json ./
-COPY client_secret.json ./
+# Copy required files (optional — bot works without them in degraded mode)
+COPY service-account.json* ./
+COPY client_secret.json* ./
 
 # Copy gog binary
 COPY gog-bin/ ./gog-bin/
