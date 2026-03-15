@@ -1,5 +1,6 @@
 import dotenv from 'dotenv';
 import { z } from 'zod';
+import path from 'path';
 
 dotenv.config();
 
@@ -22,6 +23,12 @@ const configSchema = z.object({
     WHATSAPP_VERIFY_TOKEN: z.string().default("opengravity_webhook_2026"),
     WHATSAPP_BUSINESS_ID: z.string().optional(),
     WEBHOOK_PORT: z.string().default("3000").transform(Number),
+    // Security & Scalability
+    LLM_TIMEOUT_MS: z.string().default('30000').transform(Number),
+    TERMINAL_SANDBOX_DIR: z.string().default(path.join(process.cwd(), 'workspace')),
+    WHATSAPP_APP_SECRET: z.string().optional(),
+    WHATSAPP_ALLOWED_NUMBERS: z.string().optional().transform(val => val ? val.split(',').map(s => s.trim()) : []),
+    MEMORY_MAX_EMBEDDINGS: z.string().default('500').transform(Number),
 });
 
 const parsedConfig = configSchema.safeParse(process.env);

@@ -2,7 +2,7 @@ import Groq from 'groq-sdk';
 import { GoogleGenAI, Type } from '@google/genai';
 import { config } from '../config/index.js';
 import OpenAI from 'openai';
-import pRetry from 'p-retry';
+import pRetry, { AbortError } from 'p-retry';
 
 // ── Providers ──────────────────────────────────────────────────
 const groq = new Groq({ apiKey: config.GROQ_API_KEY });
@@ -211,7 +211,10 @@ async function geminiCompletion(messages: Message[], tools?: Tool[], modelOverri
     const response = await geminiClient.models.generateContent({
         model,
         contents,
-        config: geminiConfig,
+        config: {
+            ...geminiConfig,
+            abortSignal: AbortSignal.timeout(config.LLM_TIMEOUT_MS),
+        },
     });
 
     const textContent = response.text || null;
@@ -237,12 +240,15 @@ async function groqCompletion(messages: Message[], tools?: Tool[]): Promise<Comp
         return rest;
     });
 
-    const response = await groq.chat.completions.create({
-        model: GROQ_MODEL,
-        messages: cleanMessages as any,
-        tools: tools as any,
-        tool_choice: 'auto',
-    });
+    const response = await groq.chat.completions.create(
+        {
+            model: GROQ_MODEL,
+            messages: cleanMessages as any,
+            tools: tools as any,
+            tool_choice: 'auto',
+        },
+        { signal: AbortSignal.timeout(config.LLM_TIMEOUT_MS) }
+    );
 
     const msg = response.choices[0].message;
     const toolCalls: ToolCallResult[] = [];
@@ -280,11 +286,14 @@ async function openRouterCompletion(messages: Message[], tools?: Tool[]): Promis
         }
     }));
 
-    const response = await openRouter.chat.completions.create({
-        model: config.OPENROUTER_MODEL || 'openrouter/auto',
-        messages: cleanMessages as any,
-        tools: openaiTools,
-    });
+    const response = await openRouter.chat.completions.create(
+        {
+            model: config.OPENROUTER_MODEL || 'openrouter/auto',
+            messages: cleanMessages as any,
+            tools: openaiTools,
+        },
+        { signal: AbortSignal.timeout(config.LLM_TIMEOUT_MS) }
+    );
 
     const msg = response.choices[0].message;
     const toolCalls: ToolCallResult[] = [];
@@ -309,6 +318,9 @@ export async function getCompletion(messages: Message[], tools?: Tool[]): Promis
             try {
                 return await geminiCompletion(messages, tools);
             } catch (error: any) {
+                if (error.name === 'AbortError' || error.name === 'TimeoutError') {
+                    throw new AbortError(`LLM timeout after ${config.LLM_TIMEOUT_MS}ms (Gemini)`);
+                }
                 console.error('⚠️ Gemini error, falling back to Groq:', error?.message || error);
             }
         }
@@ -316,10 +328,16 @@ export async function getCompletion(messages: Message[], tools?: Tool[]): Promis
         try {
             return await groqCompletion(messages, tools);
         } catch (error: any) {
+            if (error.name === 'AbortError' || error.name === 'TimeoutError') {
+                throw new AbortError(`LLM timeout after ${config.LLM_TIMEOUT_MS}ms (Groq)`);
+            }
             console.error('⚠️ Groq API error, falling back to OpenRouter:', error?.message || error);
             try {
                 return await openRouterCompletion(messages, tools);
-            } catch (lastError) {
+            } catch (lastError: any) {
+                if (lastError.name === 'AbortError' || lastError.name === 'TimeoutError') {
+                    throw new AbortError(`LLM timeout after ${config.LLM_TIMEOUT_MS}ms (OpenRouter)`);
+                }
                 console.error('❌ OpenRouter API error:', lastError);
                 throw lastError;
             }
