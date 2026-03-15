@@ -9,6 +9,7 @@ const configSchema = z.object({
     TELEGRAM_ALLOWED_USER_IDS: z.string().transform((val) => val.split(',').map(id => id.trim())),
     GROQ_API_KEY: z.string().min(1, "GROQ_API_KEY is required"),
     ANTHROPIC_API_KEY: z.string().optional(),
+    TAVILY_API_KEY: z.string().optional(),
     GEMINI_API_KEY: z.string().optional(),
     OPENROUTER_API_KEY: z.string().optional(),
     OPENROUTER_MODEL: z.string().default("openrouter/free"),
