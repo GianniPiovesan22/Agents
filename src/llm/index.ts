@@ -2,6 +2,7 @@ import Groq from 'groq-sdk';
 import { GoogleGenAI, Type } from '@google/genai';
 import { config } from '../config/index.js';
 import OpenAI from 'openai';
+import Anthropic from '@anthropic-ai/sdk';
 import pRetry from 'p-retry';
 
 // ── Providers ──────────────────────────────────────────────────
@@ -15,16 +16,23 @@ const geminiClient = config.GEMINI_API_KEY
     ? new GoogleGenAI({ apiKey: config.GEMINI_API_KEY })
     : null;
 
-// ── Model Tiers ────────────────────────────────────────────────
-const MODELS = {
-    fast: 'gemini-2.5-flash',       // Quick tasks: greetings, simple Q&A, tools
-    pro: 'gemini-2.5-pro', // Complex: analysis, research, coding, long context
-    ultra: 'gemini-2.5-pro', // Hardest: deep reasoning, multi-step planning
+const anthropicClient = config.ANTHROPIC_API_KEY
+    ? new Anthropic({ apiKey: config.ANTHROPIC_API_KEY })
+    : null;
+
+// ── Anthropic Model ────────────────────────────────────────────
+const ANTHROPIC_MODEL = 'claude-sonnet-4-5';
+
+// ── Gemini Model Tiers (fallback) ──────────────────────────────
+const GEMINI_MODELS = {
+    fast: 'gemini-2.5-flash',
+    pro: 'gemini-2.5-pro',
+    ultra: 'gemini-2.5-pro',
 } as const;
 
 const GROQ_MODEL = 'llama-3.3-70b-versatile';
 
-// ── Smart Model Router ─────────────────────────────────────────
+// ── Smart Model Router (for Gemini fallback) ───────────────────
 const COMPLEX_KEYWORDS = [
     // Analysis & reasoning
     'analizá', 'analiza', 'análisis', 'explicame', 'explicá', 'detallado',
@@ -44,24 +52,17 @@ const COMPLEX_KEYWORDS = [
     'usá pro', 'modelo potente', 'pensá bien', 'con detalle', 'a fondo',
 ];
 
-function classifyComplexity(messages: Message[]): keyof typeof MODELS {
-    // Get the last user message
+function classifyComplexity(messages: Message[]): keyof typeof GEMINI_MODELS {
     const lastUserMsg = [...messages].reverse().find(m => m.role === 'user');
     if (!lastUserMsg) return 'fast';
 
     const text = lastUserMsg.content.toLowerCase();
-
-    // Short messages (< 20 chars) are almost always simple
     if (text.length < 20) return 'fast';
 
-    // Check for complexity keywords
     const complexityScore = COMPLEX_KEYWORDS.filter(kw => text.includes(kw)).length;
-
-    // Long messages with multiple sentences suggest complex requests
     const sentenceCount = (text.match(/[.!?]+/g) || []).length + 1;
     const wordCount = text.split(/\s+/).length;
 
-    // Scoring: keywords + length + sentence complexity
     let score = complexityScore * 2;
     if (wordCount > 50) score += 2;
     if (wordCount > 100) score += 2;
@@ -79,6 +80,7 @@ export interface Message {
     tool_call_id?: string;
     name?: string;
     images?: { mimeType: string, data: string }[];
+    tool_calls?: ToolCallResult[]; // for in-memory use (Anthropic format)
 }
 
 export interface Tool {
@@ -99,6 +101,104 @@ export interface ToolCallResult {
 export interface CompletionResult {
     content: string | null;
     tool_calls: ToolCallResult[];
+}
+
+// ── Anthropic Message Conversion ───────────────────────────────
+function convertMessagesForAnthropic(messages: Message[]) {
+    let system = '';
+    const converted: any[] = [];
+
+    for (const msg of messages) {
+        if (msg.role === 'system') {
+            system += (system ? '\n\n' : '') + msg.content;
+            continue;
+        }
+
+        if (msg.role === 'user') {
+            const parts: any[] = [];
+            if (msg.content) parts.push({ type: 'text', text: msg.content });
+            if (msg.images) {
+                for (const img of msg.images) {
+                    parts.push({
+                        type: 'image',
+                        source: { type: 'base64', media_type: img.mimeType, data: img.data },
+                    });
+                }
+            }
+            converted.push({ role: 'user', content: parts });
+
+        } else if (msg.role === 'assistant' || msg.role === 'model') {
+            const parts: any[] = [];
+            if (msg.content) parts.push({ type: 'text', text: msg.content });
+            // Include tool_use blocks so Anthropic sees the proper pairing
+            if (msg.tool_calls) {
+                for (const tc of msg.tool_calls) {
+                    const input = typeof tc.arguments === 'string'
+                        ? JSON.parse(tc.arguments)
+                        : tc.arguments;
+                    parts.push({ type: 'tool_use', id: tc.id, name: tc.name, input });
+                }
+            }
+            if (parts.length > 0) {
+                converted.push({ role: 'assistant', content: parts });
+            }
+
+        } else if (msg.role === 'tool') {
+            // Tool results must be user messages with tool_result blocks
+            const toolResult = {
+                type: 'tool_result',
+                tool_use_id: msg.tool_call_id,
+                content: msg.content || '',
+            };
+            // If the previous converted message is already a user message (aggregating multiple tool results)
+            const prev = converted[converted.length - 1];
+            if (prev && prev.role === 'user' && Array.isArray(prev.content)) {
+                prev.content.push(toolResult);
+            } else {
+                converted.push({ role: 'user', content: [toolResult] });
+            }
+        }
+    }
+
+    return { system, messages: converted };
+}
+
+// ── Anthropic Completion (PRIMARY) ─────────────────────────────
+async function anthropicCompletion(messages: Message[], tools?: Tool[]): Promise<CompletionResult> {
+    if (!anthropicClient) throw new Error('Anthropic not configured');
+
+    console.log(`🧠 Provider: Anthropic (${ANTHROPIC_MODEL})`);
+
+    const { system, messages: anthropicMessages } = convertMessagesForAnthropic(messages);
+
+    const anthropicTools = tools?.map(t => ({
+        name: t.function.name,
+        description: t.function.description,
+        input_schema: t.function.parameters as any,
+    }));
+
+    const response = await anthropicClient.messages.create({
+        model: ANTHROPIC_MODEL,
+        max_tokens: 8096,
+        ...(system ? { system } : {}),
+        messages: anthropicMessages,
+        ...(anthropicTools && anthropicTools.length > 0 ? { tools: anthropicTools } : {}),
+    });
+
+    const textContent = response.content
+        .filter((b: any) => b.type === 'text')
+        .map((b: any) => b.text)
+        .join('') || null;
+
+    const toolCalls: ToolCallResult[] = response.content
+        .filter((b: any) => b.type === 'tool_use')
+        .map((b: any) => ({
+            id: b.id,
+            name: b.name,
+            arguments: b.input,
+        }));
+
+    return { content: textContent, tool_calls: toolCalls };
 }
 
 // ── Gemini Schema Conversion ───────────────────────────────────
@@ -162,18 +262,11 @@ function convertMessagesForGemini(messages: Message[]) {
                     });
                 }
             }
-            contents.push({
-                role: 'user',
-                parts,
-            });
+            contents.push({ role: 'user', parts });
         } else if (msg.role === 'assistant' || msg.role === 'model') {
             const parts: any[] = [];
-            if (msg.content) {
-                parts.push({ text: msg.content });
-            }
-            if (parts.length > 0) {
-                contents.push({ role: 'model', parts });
-            }
+            if (msg.content) parts.push({ text: msg.content });
+            if (parts.length > 0) contents.push({ role: 'model', parts });
         } else if (msg.role === 'tool') {
             contents.push({
                 role: 'user',
@@ -190,23 +283,19 @@ function convertMessagesForGemini(messages: Message[]) {
     return { systemInstruction: systemInstruction.join('\n\n'), contents };
 }
 
-// ── Gemini Completion ──────────────────────────────────────────
-async function geminiCompletion(messages: Message[], tools?: Tool[], modelOverride?: string): Promise<CompletionResult> {
+// ── Gemini Completion (Fallback 1) ─────────────────────────────
+async function geminiCompletion(messages: Message[], tools?: Tool[]): Promise<CompletionResult> {
     if (!geminiClient) throw new Error('Gemini not configured');
 
     const tier = classifyComplexity(messages);
-    const model = modelOverride || MODELS[tier];
-    console.log(`🧠 Model: ${model} (tier: ${tier})`);
+    const model = GEMINI_MODELS[tier];
+    console.log(`🧠 Provider: Gemini (${model}, tier: ${tier})`);
 
     const { systemInstruction, contents } = convertMessagesForGemini(messages);
 
     const geminiConfig: any = {};
-    if (systemInstruction) {
-        geminiConfig.systemInstruction = systemInstruction;
-    }
-    if (tools && tools.length > 0) {
-        geminiConfig.tools = convertToolsForGemini(tools);
-    }
+    if (systemInstruction) geminiConfig.systemInstruction = systemInstruction;
+    if (tools && tools.length > 0) geminiConfig.tools = convertToolsForGemini(tools);
 
     const response = await geminiClient.models.generateContent({
         model,
@@ -215,8 +304,8 @@ async function geminiCompletion(messages: Message[], tools?: Tool[], modelOverri
     });
 
     const textContent = response.text || null;
-
     const toolCalls: ToolCallResult[] = [];
+
     if (response.functionCalls && response.functionCalls.length > 0) {
         for (const fc of response.functionCalls) {
             toolCalls.push({
@@ -230,10 +319,12 @@ async function geminiCompletion(messages: Message[], tools?: Tool[], modelOverri
     return { content: textContent, tool_calls: toolCalls };
 }
 
-// ── Groq Completion (fallback) ─────────────────────────────────
+// ── Groq Completion (Fallback 2) ───────────────────────────────
 async function groqCompletion(messages: Message[], tools?: Tool[]): Promise<CompletionResult> {
+    console.log(`🧠 Provider: Groq (${GROQ_MODEL})`);
+
     const cleanMessages = messages.map(m => {
-        const { images, ...rest } = m;
+        const { images, tool_calls, ...rest } = m;
         return rest;
     });
 
@@ -260,14 +351,15 @@ async function groqCompletion(messages: Message[], tools?: Tool[]): Promise<Comp
     return { content: msg.content || null, tool_calls: toolCalls };
 }
 
-// ── OpenRouter Completion (Second Fallback) ────────────────────
+// ── OpenRouter Completion (Fallback 3) ─────────────────────────
 async function openRouterCompletion(messages: Message[], tools?: Tool[]): Promise<CompletionResult> {
+    console.log(`🧠 Provider: OpenRouter (${config.OPENROUTER_MODEL || 'openrouter/auto'})`);
+
     const cleanMessages = messages.map(m => {
-        const { images, ...rest } = m;
-        // Map inner roles to standard OpenAI roles
+        const { images, tool_calls, ...rest } = m;
         return {
             ...rest,
-            role: (rest.role === 'model' ? 'assistant' : rest.role) as any
+            role: (rest.role === 'model' ? 'assistant' : rest.role) as any,
         };
     });
 
@@ -276,8 +368,8 @@ async function openRouterCompletion(messages: Message[], tools?: Tool[]): Promis
         function: {
             name: t.function.name,
             description: t.function.description,
-            parameters: t.function.parameters as any
-        }
+            parameters: t.function.parameters as any,
+        },
     }));
 
     const response = await openRouter.chat.completions.create({
@@ -305,6 +397,16 @@ async function openRouterCompletion(messages: Message[], tools?: Tool[]): Promis
 // ── Main Completion ────────────────────────────────────────────
 export async function getCompletion(messages: Message[], tools?: Tool[]): Promise<CompletionResult> {
     const result = await pRetry(async () => {
+        // PRIMARY: Anthropic Claude
+        if (anthropicClient) {
+            try {
+                return await anthropicCompletion(messages, tools);
+            } catch (error: any) {
+                console.error('⚠️ Anthropic error, falling back to Gemini:', error?.message || error);
+            }
+        }
+
+        // FALLBACK 1: Gemini
         if (geminiClient) {
             try {
                 return await geminiCompletion(messages, tools);
@@ -313,16 +415,19 @@ export async function getCompletion(messages: Message[], tools?: Tool[]): Promis
             }
         }
 
+        // FALLBACK 2: Groq
         try {
             return await groqCompletion(messages, tools);
         } catch (error: any) {
-            console.error('⚠️ Groq API error, falling back to OpenRouter:', error?.message || error);
-            try {
-                return await openRouterCompletion(messages, tools);
-            } catch (lastError) {
-                console.error('❌ OpenRouter API error:', lastError);
-                throw lastError;
-            }
+            console.error('⚠️ Groq error, falling back to OpenRouter:', error?.message || error);
+        }
+
+        // FALLBACK 3: OpenRouter
+        try {
+            return await openRouterCompletion(messages, tools);
+        } catch (lastError) {
+            console.error('❌ All providers failed:', lastError);
+            throw lastError;
         }
     }, { retries: 2 });
 
@@ -336,7 +441,6 @@ export async function getCompletion(messages: Message[], tools?: Tool[]): Promis
             const name = match[1];
             const rawArgs = match[2];
             try {
-                // Remove optional leading/trailing spaces before parse
                 const parsedArgs = JSON.parse(rawArgs.trim());
                 result.tool_calls.push({
                     id: `regex_${name}_${Date.now()}_${Math.floor(Math.random() * 1000)}`,

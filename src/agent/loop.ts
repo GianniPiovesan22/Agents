@@ -120,6 +120,7 @@ RULES:
         messages.push({
             role: 'assistant',
             content: response.content || '',
+            tool_calls: response.tool_calls, // required for Anthropic tool_use/tool_result pairing
         });
 
         for (const toolCall of response.tool_calls) {
