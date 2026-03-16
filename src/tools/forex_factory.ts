@@ -4,124 +4,69 @@ import { saveForexEvents, ForexEvent } from '../database/index.js';
 
 // ═══════════════════════════════════════════════════════════════
 // FOREX FACTORY — Economic Calendar + News
+// Uses the public FF JSON calendar feed (no scraping needed)
 // ═══════════════════════════════════════════════════════════════
 
+const FF_CALENDAR_THIS_WEEK = 'https://nfs.faireconomy.media/ff_calendar_thisweek.json';
+const FF_CALENDAR_NEXT_WEEK = 'https://nfs.faireconomy.media/ff_calendar_nextweek.json';
 const JINA_BASE = 'https://r.jina.ai';
-const FF_CALENDAR_URL = 'https://www.forexfactory.com/calendar';
 const FF_NEWS_URL = 'https://www.forexfactory.com/news';
 
-/**
- * Determine impact level from text found in the markdown.
- * Forex Factory uses color-coded icons; Jina renders them as alt text or labels.
- */
-function parseImpact(raw: string): string {
-    const lower = raw.toLowerCase();
-    if (lower.includes('high') || lower.includes('red')) return 'High';
-    if (lower.includes('medium') || lower.includes('orange')) return 'Medium';
-    if (lower.includes('low') || lower.includes('yellow')) return 'Low';
-    return 'Low';
+interface FFCalendarItem {
+    title: string;
+    country: string;
+    date: string;       // ISO string e.g. "2025-03-17T08:30:00-0400"
+    impact: string;     // "High" | "Medium" | "Low" | "Non-Economic"
+    forecast: string;
+    previous: string;
+    actual?: string;
 }
 
-/**
- * Parses the Jina-rendered markdown of the FF calendar page.
- * Returns an array of structured event objects.
- */
-function parseCalendarMarkdown(markdown: string): ForexEvent[] {
-    const events: ForexEvent[] = [];
-    const fetched_at = new Date().toISOString();
-
-    // Split into lines and scan for table rows or structured data.
-    // Jina typically renders the FF calendar as a markdown table or line-delimited blocks.
-    // We look for lines that have a time pattern (HH:MM), currency code (3 letters), and event name.
-    const lines = markdown.split('\n');
-
-    // State to track current date header
-    let currentDate = new Date().toISOString().slice(0, 10);
-    let eventIndex = 0;
-
-    // Regex to capture table-like rows: time | currency | impact | event | forecast | previous | actual
-    // Jina may render FF calendar as: | time | currency | impact | event | forecast | previous | actual |
-    const tableRowRe = /^\|?\s*([\d:apmAPM]*)\s*\|?\s*([A-Z]{3})\s*\|?\s*(\w+)\s*\|?\s*([^|]+?)\s*\|?\s*([^|]*?)\s*\|?\s*([^|]*?)\s*\|?\s*([^|]*?)\s*\|?$/;
-
-    // Also handle date headers like "Mon Mar 17" or "Monday, March 17, 2025"
-    const dateHeaderRe = /\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\w*\s+\d{1,2},?\s+\d{4}/i;
-    const dateShortRe = /\b(mon|tue|wed|thu|fri|sat|sun)\w*\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\w*\s+(\d{1,2})/i;
-
-    for (const rawLine of lines) {
-        const line = rawLine.trim();
-
-        // Detect date headers
-        const dateHeaderMatch = line.match(dateHeaderRe);
-        if (dateHeaderMatch) {
-            const parsed = new Date(dateHeaderMatch[0]);
-            if (!isNaN(parsed.getTime())) {
-                currentDate = parsed.toISOString().slice(0, 10);
-            }
-            continue;
-        }
-
-        const dateShortMatch = line.match(dateShortRe);
-        if (dateShortMatch) {
-            const year = new Date().getFullYear();
-            const parsed = new Date(`${dateShortMatch[2]} ${dateShortMatch[3]} ${year}`);
-            if (!isNaN(parsed.getTime())) {
-                currentDate = parsed.toISOString().slice(0, 10);
-            }
-            continue;
-        }
-
-        // Try to match a table row with at least currency + event
-        const match = line.match(tableRowRe);
-        if (match) {
-            const [, time, currency, impactRaw, eventName, forecast, previous, actual] = match;
-            const cleanName = eventName.replace(/\*/g, '').trim();
-            if (!cleanName || cleanName === 'Event' || cleanName === '---') continue;
-
-            const impact = parseImpact(impactRaw);
-            const id = `${currentDate}_${currency}_${cleanName}_${eventIndex++}`.replace(/\s+/g, '_').slice(0, 100);
-
-            events.push({
-                id,
-                event_date: currentDate,
-                event_time: time.trim() || undefined,
-                currency: currency.trim(),
-                event_name: cleanName,
-                impact,
-                forecast: forecast?.trim() || undefined,
-                previous: previous?.trim() || undefined,
-                actual: actual?.trim() || undefined,
-                fetched_at,
-            });
-        }
-    }
-
-    return events;
+async function fetchCalendarWeek(url: string): Promise<FFCalendarItem[]> {
+    const response = await axios.get<FFCalendarItem[]>(url, { timeout: 15000 });
+    return Array.isArray(response.data) ? response.data : [];
 }
 
-/**
- * Format events grouped by day for display.
- */
+function toForexEvent(item: FFCalendarItem, index: number): ForexEvent {
+    const date = new Date(item.date);
+    const event_date = date.toISOString().slice(0, 10);
+    const event_time = date.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit', hour12: false });
+    const id = `${event_date}_${item.country}_${item.title}_${index}`.replace(/\s+/g, '_').slice(0, 100);
+
+    return {
+        id,
+        event_date,
+        event_time,
+        currency: item.country,
+        event_name: item.title,
+        impact: item.impact,
+        forecast: item.forecast || undefined,
+        previous: item.previous || undefined,
+        actual: item.actual || undefined,
+        fetched_at: new Date().toISOString(),
+    };
+}
+
 function formatEvents(events: ForexEvent[]): string {
     if (events.length === 0) return 'No se encontraron eventos económicos para el período solicitado.';
 
-    // Group by date
     const byDate: Record<string, ForexEvent[]> = {};
     for (const e of events) {
         if (!byDate[e.event_date]) byDate[e.event_date] = [];
         byDate[e.event_date].push(e);
     }
 
-    const impactEmoji: Record<string, string> = { High: '🔴', Medium: '🟠', Low: '🟡' };
+    const impactEmoji: Record<string, string> = { High: '🔴', Medium: '🟠', Low: '🟡', 'Non-Economic': '⚪' };
 
-    let result = '📅 **Calendario Económico — Forex Factory**\n\n';
+    let result = '📅 Calendario Económico — Forex Factory\n\n';
     for (const [date, dayEvents] of Object.entries(byDate).sort()) {
         const dateLabel = new Date(date + 'T12:00:00').toLocaleDateString('es-AR', {
             weekday: 'long', day: 'numeric', month: 'long'
         });
-        result += `**${dateLabel}**\n`;
+        result += `${dateLabel.toUpperCase()}\n`;
         for (const e of dayEvents) {
             const emoji = impactEmoji[e.impact] ?? '⚪';
-            const time = e.event_time ? `\`${e.event_time}\` ` : '';
+            const time = e.event_time ? `${e.event_time} ` : '';
             const currency = e.currency ? `[${e.currency}] ` : '';
             const forecast = e.forecast ? ` | Prev: ${e.forecast}` : '';
             const prev = e.previous ? ` | Ant: ${e.previous}` : '';
@@ -162,26 +107,34 @@ registerTool({
         const days = Math.min(Math.max(args.days ?? 3, 1), 7);
 
         try {
-            const response = await axios.get(`${JINA_BASE}/${FF_CALENDAR_URL}`, {
-                headers: { 'Accept': 'text/plain, */*' },
-                timeout: 20000,
-            });
+            // Fetch this week + next week in parallel
+            const [thisWeek, nextWeek] = await Promise.allSettled([
+                fetchCalendarWeek(FF_CALENDAR_THIS_WEEK),
+                fetchCalendarWeek(FF_CALENDAR_NEXT_WEEK),
+            ]);
 
-            let markdown: string = typeof response.data === 'string'
-                ? response.data
-                : JSON.stringify(response.data);
+            const raw: FFCalendarItem[] = [
+                ...(thisWeek.status === 'fulfilled' ? thisWeek.value : []),
+                ...(nextWeek.status === 'fulfilled' ? nextWeek.value : []),
+            ];
 
-            if (markdown.length > 40000) {
-                markdown = markdown.slice(0, 40000);
+            if (raw.length === 0) {
+                return 'No se pudo obtener el calendario económico. Intentá de nuevo en unos minutos.';
             }
 
-            const allEvents = parseCalendarMarkdown(markdown);
+            const allEvents = raw.map((item, i) => toForexEvent(item, i));
+
+            // Save to cache
+            saveForexEvents(allEvents);
 
             // Filter by date range
-            const cutoff = new Date();
+            const today = new Date();
+            today.setHours(0, 0, 0, 0);
+            const cutoff = new Date(today);
             cutoff.setDate(cutoff.getDate() + days);
+
+            const todayStr = today.toISOString().slice(0, 10);
             const cutoffStr = cutoff.toISOString().slice(0, 10);
-            const todayStr = new Date().toISOString().slice(0, 10);
 
             let filtered = allEvents.filter(e => e.event_date >= todayStr && e.event_date <= cutoffStr);
 
@@ -191,14 +144,9 @@ registerTool({
                 filtered = filtered.filter(e => e.impact === targetImpact);
             }
 
-            // Cache to SQLite
-            if (allEvents.length > 0) {
-                saveForexEvents(allEvents);
-            }
-
             return formatEvents(filtered);
         } catch (error: any) {
-            return `Error obteniendo el calendario económico de Forex Factory: ${error.message}`;
+            return `Error obteniendo el calendario económico: ${error.message}`;
         }
     },
 });
@@ -209,7 +157,7 @@ registerTool({
         type: 'function',
         function: {
             name: 'get_forex_news',
-            description: 'Fetches the latest high-impact forex news from Forex Factory. Returns the top 10 most recent news items with title, time, and summary.',
+            description: 'Fetches the latest high-impact forex news from Forex Factory. Returns the top 10 most recent news items.',
             parameters: {
                 type: 'object',
                 properties: {},
@@ -228,12 +176,8 @@ registerTool({
                 ? response.data
                 : JSON.stringify(response.data);
 
-            if (markdown.length > 20000) {
-                markdown = markdown.slice(0, 20000);
-            }
+            if (markdown.length > 20000) markdown = markdown.slice(0, 20000);
 
-            // Extract news items: look for lines that resemble news entries
-            // Jina renders FF news as markdown with headings/paragraphs
             const lines = markdown.split('\n').filter(l => l.trim().length > 0);
             const newsItems: string[] = [];
             let i = 0;
@@ -241,11 +185,9 @@ registerTool({
 
             while (i < lines.length && count < 10) {
                 const line = lines[i].trim();
-                // Heading lines (## or ### or bold) often are news titles
                 if (line.startsWith('##') || line.startsWith('**')) {
                     const title = line.replace(/^#+\s*/, '').replace(/\*\*/g, '').trim();
                     if (title.length > 5 && title.length < 200) {
-                        // Try to grab the next non-empty line as summary
                         let summary = '';
                         let j = i + 1;
                         while (j < lines.length && !lines[j].trim()) j++;
@@ -256,7 +198,7 @@ registerTool({
                                 i = j;
                             }
                         }
-                        newsItems.push(`• **${title}**${summary ? `\n  ${summary}` : ''}`);
+                        newsItems.push(`📌 ${title}${summary ? `\n   ${summary}` : ''}`);
                         count++;
                     }
                 }
@@ -264,11 +206,10 @@ registerTool({
             }
 
             if (newsItems.length === 0) {
-                // Fallback: return raw truncated markdown
-                return `📰 **Forex Factory News**\n\n${markdown.slice(0, 3000)}\n\n_(Vista cruda — el parser no encontró ítems estructurados)_`;
+                return `📰 Forex Factory News\n\n${markdown.slice(0, 3000)}`;
             }
 
-            return `📰 **Forex Factory News** — Top ${newsItems.length} noticias\n\n${newsItems.join('\n\n')}`;
+            return `📰 Forex Factory News — Top ${newsItems.length} noticias\n\n${newsItems.join('\n\n')}`;
         } catch (error: any) {
             return `Error obteniendo noticias de Forex Factory: ${error.message}`;
         }
