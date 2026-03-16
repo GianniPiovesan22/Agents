@@ -17,7 +17,7 @@ const configSchema = z.object({
     FIREBASE_PROJECT_ID: z.string().optional(),
     GOOGLE_APPLICATION_CREDENTIALS: z.string().optional(),
     ELEVENLABS_API_KEY: z.string().optional(),
-    ELEVENLABS_VOICE_ID: z.string().default("p7AwDmKvTdoHTBuueGvP"),
+    ELEVENLABS_VOICE_ID: z.string().default("YKrm0N1EAM9Bw27j8kuD"),
     GOG_ACCOUNT: z.string().optional(),
     GOOGLE_CLIENT_ID: z.string().optional(),
     GOOGLE_CLIENT_SECRET: z.string().optional(),
