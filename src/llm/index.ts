@@ -2,15 +2,10 @@ import Groq from 'groq-sdk';
 import { GoogleGenAI, Type } from '@google/genai';
 import { config } from '../config/index.js';
 import OpenAI from 'openai';
-import Anthropic from '@anthropic-ai/sdk';
-import pRetry, { AbortError } from 'p-retry';
+import pRetry from 'p-retry';
 
 // ── Providers ──────────────────────────────────────────────────
 const groq = new Groq({ apiKey: config.GROQ_API_KEY });
-
-const anthropicClient = config.ANTHROPIC_API_KEY
-    ? new Anthropic({ apiKey: config.ANTHROPIC_API_KEY })
-    : null;
 const openRouter = new OpenAI({
     baseURL: "https://openrouter.ai/api/v1",
     apiKey: config.OPENROUTER_API_KEY,
@@ -22,9 +17,9 @@ const geminiClient = config.GEMINI_API_KEY
 
 // ── Model Tiers ────────────────────────────────────────────────
 const MODELS = {
-    fast: 'gemini-2.0-flash',       // Quick tasks: greetings, simple Q&A, tools
-    pro: 'gemini-2.0-pro-exp-02-05', // Complex: analysis, research, coding, long context
-    ultra: 'gemini-2.0-pro-exp-02-05', // Hardest: deep reasoning, multi-step planning
+    fast: 'gemini-2.5-flash',       // Quick tasks: greetings, simple Q&A, tools
+    pro: 'gemini-2.5-pro', // Complex: analysis, research, coding, long context
+    ultra: 'gemini-2.5-pro', // Hardest: deep reasoning, multi-step planning
 } as const;
 
 const GROQ_MODEL = 'llama-3.3-70b-versatile';
@@ -32,7 +27,7 @@ const GROQ_MODEL = 'llama-3.3-70b-versatile';
 // ── Smart Model Router ─────────────────────────────────────────
 const COMPLEX_KEYWORDS = [
     // Analysis & reasoning
-    'analizá', 'analiza', 'analizame', 'análisis', 'explicame', 'explicá', 'detallado',
+    'analizá', 'analiza', 'análisis', 'explicame', 'explicá', 'detallado',
     'profundidad', 'razona', 'razonamiento', 'por qué', 'porque',
     // Coding
     'código', 'programa', 'script', 'función', 'refactorizar', 'debug',
@@ -216,10 +211,7 @@ async function geminiCompletion(messages: Message[], tools?: Tool[], modelOverri
     const response = await geminiClient.models.generateContent({
         model,
         contents,
-        config: {
-            ...geminiConfig,
-            abortSignal: AbortSignal.timeout(config.LLM_TIMEOUT_MS),
-        },
+        config: geminiConfig,
     });
 
     const textContent = response.text || null;
@@ -238,101 +230,6 @@ async function geminiCompletion(messages: Message[], tools?: Tool[], modelOverri
     return { content: textContent, tool_calls: toolCalls };
 }
 
-// ── Anthropic Model Tiers ──────────────────────────────────────
-const ANTHROPIC_MODELS = {
-    fast: 'claude-haiku-4-5',
-    pro: 'claude-sonnet-4-6',
-    ultra: 'claude-opus-4-6',
-} as const;
-
-// ── Anthropic Message/Tool Conversion ─────────────────────────
-function convertToolsForAnthropic(tools: Tool[]): Anthropic.Tool[] {
-    return tools.map(t => ({
-        name: t.function.name,
-        description: t.function.description,
-        input_schema: t.function.parameters as Anthropic.Tool['input_schema'],
-    }));
-}
-
-function convertMessagesForAnthropic(messages: Message[]): { system: string; messages: Anthropic.MessageParam[] } {
-    const systemParts: string[] = [];
-    const converted: Anthropic.MessageParam[] = [];
-
-    for (const msg of messages) {
-        if (msg.role === 'system') {
-            systemParts.push(msg.content);
-            continue;
-        }
-        if (msg.role === 'tool') {
-            converted.push({
-                role: 'user',
-                content: [{
-                    type: 'tool_result',
-                    tool_use_id: msg.tool_call_id || 'unknown',
-                    content: msg.content,
-                }],
-            });
-            continue;
-        }
-        const role = (msg.role === 'model' ? 'assistant' : msg.role) as 'user' | 'assistant';
-        converted.push({ role, content: msg.content });
-    }
-
-    return { system: systemParts.join('\n\n'), messages: converted };
-}
-
-// ── Anthropic Completion ───────────────────────────────────────
-async function anthropicCompletion(messages: Message[], tools?: Tool[]): Promise<CompletionResult> {
-    if (!anthropicClient) throw new Error('Anthropic not configured');
-
-    const tier = classifyComplexity(messages);
-    const model = ANTHROPIC_MODELS[tier] ?? ANTHROPIC_MODELS.ultra;
-    console.log(`🧠 Model: ${model} (tier: ${tier})`);
-
-    const { system, messages: convertedMessages } = convertMessagesForAnthropic(messages);
-
-    const isUltra = tier === 'ultra';
-    const maxTokens = isUltra ? 16000 : 8000;
-
-    const requestParams: Anthropic.MessageCreateParamsNonStreaming = {
-        model,
-        max_tokens: maxTokens,
-        messages: convertedMessages,
-        ...(system ? { system } : {}),
-        ...(tools && tools.length > 0 ? { tools: convertToolsForAnthropic(tools) } : {}),
-        ...(isUltra ? { thinking: { type: 'adaptive' } } : {}),
-    };
-
-    try {
-        const response = await anthropicClient.messages.create(
-            requestParams,
-            { signal: AbortSignal.timeout(config.LLM_TIMEOUT_MS) }
-        );
-
-        let textContent: string | null = null;
-        const toolCalls: ToolCallResult[] = [];
-
-        for (const block of response.content) {
-            if (block.type === 'text') {
-                textContent = block.text;
-            } else if (block.type === 'tool_use') {
-                toolCalls.push({
-                    id: block.id,
-                    name: block.name,
-                    arguments: block.input as object,
-                });
-            }
-        }
-
-        return { content: textContent, tool_calls: toolCalls };
-    } catch (error: any) {
-        if (isUltra && (error.name === 'AbortError' || error.name === 'TimeoutError')) {
-            throw new AbortError(`LLM timeout after ${config.LLM_TIMEOUT_MS}ms (Anthropic ultra)`);
-        }
-        throw error;
-    }
-}
-
 // ── Groq Completion (fallback) ─────────────────────────────────
 async function groqCompletion(messages: Message[], tools?: Tool[]): Promise<CompletionResult> {
     const cleanMessages = messages.map(m => {
@@ -340,15 +237,12 @@ async function groqCompletion(messages: Message[], tools?: Tool[]): Promise<Comp
         return rest;
     });
 
-    const response = await groq.chat.completions.create(
-        {
-            model: GROQ_MODEL,
-            messages: cleanMessages as any,
-            tools: tools as any,
-            tool_choice: 'auto',
-        },
-        { signal: AbortSignal.timeout(config.LLM_TIMEOUT_MS) }
-    );
+    const response = await groq.chat.completions.create({
+        model: GROQ_MODEL,
+        messages: cleanMessages as any,
+        tools: tools as any,
+        tool_choice: 'auto',
+    });
 
     const msg = response.choices[0].message;
     const toolCalls: ToolCallResult[] = [];
@@ -361,17 +255,6 @@ async function groqCompletion(messages: Message[], tools?: Tool[]): Promise<Comp
                 arguments: tc.function.arguments,
             });
         }
-    }
-
-    // Some Groq models output tool calls as XML text instead of structured tool_calls
-    if (toolCalls.length === 0 && msg.content) {
-        const xmlMatches = msg.content.matchAll(/<function\((\w+)\)(\{.*?\})<\/function>/gs);
-        for (const match of xmlMatches) {
-            try {
-                toolCalls.push({ id: `groq_${match[1]}_${Date.now()}`, name: match[1], arguments: JSON.parse(match[2]) });
-            } catch { /* ignore malformed */ }
-        }
-        if (toolCalls.length > 0) return { content: null, tool_calls: toolCalls };
     }
 
     return { content: msg.content || null, tool_calls: toolCalls };
@@ -397,14 +280,11 @@ async function openRouterCompletion(messages: Message[], tools?: Tool[]): Promis
         }
     }));
 
-    const response = await openRouter.chat.completions.create(
-        {
-            model: config.OPENROUTER_MODEL || 'openrouter/auto',
-            messages: cleanMessages as any,
-            tools: openaiTools,
-        },
-        { signal: AbortSignal.timeout(config.LLM_TIMEOUT_MS) }
-    );
+    const response = await openRouter.chat.completions.create({
+        model: config.OPENROUTER_MODEL || 'openrouter/auto',
+        messages: cleanMessages as any,
+        tools: openaiTools,
+    });
 
     const msg = response.choices[0].message;
     const toolCalls: ToolCallResult[] = [];
@@ -424,30 +304,55 @@ async function openRouterCompletion(messages: Message[], tools?: Tool[]): Promis
 
 // ── Main Completion ────────────────────────────────────────────
 export async function getCompletion(messages: Message[], tools?: Tool[]): Promise<CompletionResult> {
-    return await pRetry(async () => {
-        // Primary: Anthropic (Claude)
-        if (anthropicClient) {
+    const result = await pRetry(async () => {
+        if (geminiClient) {
             try {
-                return await anthropicCompletion(messages, tools);
+                return await geminiCompletion(messages, tools);
             } catch (error: any) {
-                if (error.name === 'AbortError' || error.name === 'TimeoutError') {
-                    throw new AbortError(`LLM timeout after ${config.LLM_TIMEOUT_MS}ms (Anthropic)`);
-                }
-                console.error('⚠️ Anthropic error, falling back to OpenRouter:', error?.message || error);
+                console.error('⚠️ Gemini error, falling back to Groq:', error?.message || error);
             }
         }
 
-        // Fallback: OpenRouter
         try {
-            return await openRouterCompletion(messages, tools);
-        } catch (lastError: any) {
-            if (lastError.name === 'AbortError' || lastError.name === 'TimeoutError') {
-                throw new AbortError(`LLM timeout after ${config.LLM_TIMEOUT_MS}ms (OpenRouter)`);
+            return await groqCompletion(messages, tools);
+        } catch (error: any) {
+            console.error('⚠️ Groq API error, falling back to OpenRouter:', error?.message || error);
+            try {
+                return await openRouterCompletion(messages, tools);
+            } catch (lastError) {
+                console.error('❌ OpenRouter API error:', lastError);
+                throw lastError;
             }
-            console.error('❌ OpenRouter error:', lastError);
-            throw lastError;
         }
     }, { retries: 2 });
+
+    // Fallback parser for hallucinated <function(name)>args</function> strings
+    if (result && result.tool_calls.length === 0 && result.content && result.content.includes('<function(')) {
+        const regex = /<function\(([\w_]+)\)>?(.*?)<\/function>/gs;
+        let match;
+        let newContent = result.content;
+
+        while ((match = regex.exec(result.content)) !== null) {
+            const name = match[1];
+            const rawArgs = match[2];
+            try {
+                // Remove optional leading/trailing spaces before parse
+                const parsedArgs = JSON.parse(rawArgs.trim());
+                result.tool_calls.push({
+                    id: `regex_${name}_${Date.now()}_${Math.floor(Math.random() * 1000)}`,
+                    name,
+                    arguments: parsedArgs,
+                });
+                newContent = newContent.replace(match[0], '').trim();
+            } catch (e) {
+                console.warn("⚠️ Failed to parse hallucinated function arguments:", rawArgs);
+            }
+        }
+
+        result.content = newContent === '' ? null : newContent;
+    }
+
+    return result as CompletionResult;
 }
 
 /**
@@ -475,8 +380,12 @@ export async function getEmbedding(text: string): Promise<number[]> {
         });
 
         return result.embeddings?.[0]?.values || [];
-    } catch (error) {
-        console.error("Error generating embedding:", error);
+    } catch (error: any) {
+        if (error.status === 404 || error.message?.includes('404')) {
+            console.error("⚠️ Embeddings API returned 404 (Ignored). Note: Some Gemini keys don't support text-embedding models.");
+        } else {
+            console.error("⚠️ Error generating embedding:", error.message || error);
+        }
         return [];
     }
 }

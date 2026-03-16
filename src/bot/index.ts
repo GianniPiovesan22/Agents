@@ -77,20 +77,38 @@ async function handleResponse(
         // Run agent
         const responseText = await runAgent(userId, history);
 
-        // Check if response contains an image
-        const imgMatch = responseText.match(/\[IMG:(.+?)\]/);
-        if (imgMatch) {
-            const imgPath = imgMatch[1];
-            const caption = responseText.replace(/\[IMG:.+?\]/, '').trim();
+        // Check if response contains images
+        const imgRegex = /\[IMG:(.+?)\]/g;
+        let match;
+        const imgPaths: string[] = [];
+        
+        while ((match = imgRegex.exec(responseText)) !== null) {
+            imgPaths.push(match[1]);
+        }
+
+        if (imgPaths.length > 0) {
+            const caption = responseText.replace(/\[IMG:(.+?)\]/g, '').trim();
             try {
                 const { InputFile } = await import('grammy');
-                await ctx.replyWithPhoto(new InputFile(imgPath), {
-                    caption: caption || '🖼️ Imagen generada',
-                });
+                
+                if (imgPaths.length === 1) {
+                    await ctx.replyWithPhoto(new InputFile(imgPaths[0]), {
+                        caption: caption || '🖼️ Imagen generada',
+                    });
+                } else {
+                    const mediaGroup = imgPaths.map((imgPath, i) => ({
+                        type: 'photo' as const,
+                        media: new InputFile(imgPath),
+                        caption: i === 0 ? (caption || '🖼️ Imágenes generadas') : undefined,
+                    }));
+                    await ctx.replyWithMediaGroup(mediaGroup);
+                }
             } finally {
-                if (fs.existsSync(imgPath)) fs.unlinkSync(imgPath);
+                for (const imgPath of imgPaths) {
+                    if (fs.existsSync(imgPath)) fs.unlinkSync(imgPath);
+                }
             }
-            await saveMessage(userId, 'assistant', caption || 'Imagen generada');
+            await saveMessage(userId, 'assistant', caption || 'Imágenes generadas');
             return;
         }
 
