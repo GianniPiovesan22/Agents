@@ -7,6 +7,7 @@ import fs from 'fs';
 import axios from 'axios';
 import Database from 'better-sqlite3';
 import path from 'path';
+import { saveForexEvents, ForexEvent } from '../database/index.js';
 
 export async function sendDailyDigest() {
     console.log("Iniciando generación de Resumen Diario (Daily Digest)...");
@@ -128,7 +129,86 @@ export async function sendDailyDigest() {
             cryptoInfo = "No pudimos obtener precios de criptomonedas.";
         }
 
-        // 6. Recordatorios pendientes (para el primer usuario permitido como referencia)
+        // 6. High-impact economic events from Forex Factory (today)
+        let forexEventsInfo = "";
+        try {
+            const localDbPath = path.resolve(process.cwd(), 'memory.db');
+            const db = new Database(localDbPath);
+            const todayStr = new Date().toISOString().slice(0, 10);
+
+            // Try to get today's high-impact events from cache first
+            const stmt = db.prepare(
+                "SELECT * FROM forex_events WHERE impact = 'High' AND event_date = ? ORDER BY event_time ASC"
+            );
+            let rows = stmt.all(todayStr) as ForexEvent[];
+
+            // If cache is empty or stale (fetched_at older than 4 hours), fetch fresh
+            const stale = rows.length === 0 || (
+                rows[0]?.fetched_at &&
+                (Date.now() - new Date(rows[0].fetched_at).getTime()) > 4 * 60 * 60 * 1000
+            );
+
+            if (stale) {
+                try {
+                    const jinaRes = await axios.get('https://r.jina.ai/https://www.forexfactory.com/calendar', {
+                        headers: { 'Accept': 'text/plain, */*' },
+                        timeout: 20000,
+                    });
+                    let markdown: string = typeof jinaRes.data === 'string'
+                        ? jinaRes.data
+                        : JSON.stringify(jinaRes.data);
+                    if (markdown.length > 40000) markdown = markdown.slice(0, 40000);
+
+                    // Inline lightweight parser (same logic as forex_factory.ts)
+                    const fetched_at = new Date().toISOString();
+                    const lines = markdown.split('\n');
+                    let currentDate = todayStr;
+                    let idx = 0;
+                    const parsed: ForexEvent[] = [];
+                    const tableRowRe = /^\|?\s*([\d:apmAPM]*)\s*\|?\s*([A-Z]{3})\s*\|?\s*(\w+)\s*\|?\s*([^|]+?)\s*\|?\s*([^|]*?)\s*\|?\s*([^|]*?)\s*\|?\s*([^|]*?)\s*\|?$/;
+                    const dateHeaderRe = /\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\w*\s+\d{1,2},?\s+\d{4}/i;
+                    const dateShortRe = /\b(mon|tue|wed|thu|fri|sat|sun)\w*\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\w*\s+(\d{1,2})/i;
+                    for (const rawLine of lines) {
+                        const line = rawLine.trim();
+                        const dh = line.match(dateHeaderRe);
+                        if (dh) { const p = new Date(dh[0]); if (!isNaN(p.getTime())) currentDate = p.toISOString().slice(0, 10); continue; }
+                        const ds = line.match(dateShortRe);
+                        if (ds) { const p = new Date(`${ds[2]} ${ds[3]} ${new Date().getFullYear()}`); if (!isNaN(p.getTime())) currentDate = p.toISOString().slice(0, 10); continue; }
+                        const m = line.match(tableRowRe);
+                        if (m) {
+                            const [, time, currency, impactRaw, eventName, forecast, previous, actual] = m;
+                            const cleanName = eventName.replace(/\*/g, '').trim();
+                            if (!cleanName || cleanName === 'Event' || cleanName === '---') continue;
+                            const lower = impactRaw.toLowerCase();
+                            const impact = lower.includes('high') || lower.includes('red') ? 'High'
+                                : lower.includes('medium') || lower.includes('orange') ? 'Medium' : 'Low';
+                            const id = `${currentDate}_${currency}_${cleanName}_${idx++}`.replace(/\s+/g, '_').slice(0, 100);
+                            parsed.push({ id, event_date: currentDate, event_time: time.trim() || undefined, currency: currency.trim(), event_name: cleanName, impact, forecast: forecast?.trim() || undefined, previous: previous?.trim() || undefined, actual: actual?.trim() || undefined, fetched_at });
+                        }
+                    }
+                    if (parsed.length > 0) saveForexEvents(parsed);
+                    rows = parsed.filter(e => e.impact === 'High' && e.event_date === todayStr);
+                } catch (fetchErr: any) {
+                    // Leave rows as-is (empty or stale cache)
+                }
+            }
+
+            if (rows.length > 0) {
+                const lines = rows.map(e => {
+                    const time = e.event_time ? `${e.event_time} ` : '';
+                    const currency = e.currency ? `[${e.currency}] ` : '';
+                    const forecast = e.forecast ? ` (Prev: ${e.forecast})` : '';
+                    return `- ${time}${currency}${e.event_name}${forecast}`;
+                });
+                forexEventsInfo = lines.join('\n');
+            } else {
+                forexEventsInfo = "Sin eventos de alto impacto para hoy.";
+            }
+        } catch (e: any) {
+            forexEventsInfo = "No pudimos obtener el calendario económico.";
+        }
+
+        // 8. Recordatorios pendientes (para el primer usuario permitido como referencia)
         let remindersInfo = "";
         try {
             const localDbPath = path.resolve(process.cwd(), 'memory.db');
@@ -153,7 +233,7 @@ export async function sendDailyDigest() {
             remindersInfo = "No pudimos obtener los recordatorios.";
         }
 
-        // 7. Crear el prompt
+        // 9. Crear el prompt
         const promptText = `
 Sos un asistente ejecutivo estelar. Elaborá un script para ser leído en un audio corto de no más de 1 minuto, arrancando con un tono motivador de buenos días (hoy es ${new Date().toLocaleDateString('es-AR')}).
 Debes darle al usuario su "Daily Digest" basado en la siguiente información recopilada:
@@ -173,10 +253,13 @@ ${weather}
 Criptomonedas:
 ${cryptoInfo}
 
+Eventos económicos de alto impacto para hoy:
+${forexEventsInfo}
+
 Recordatorios pendientes:
 ${remindersInfo || "Sin recordatorios pendientes."}
 
-Haz que suene coloquial, cálido y enfocado al éxito del día. Mencioná brevemente las cotizaciones, el clima y los reminders si los hay.
+Haz que suene coloquial, cálido y enfocado al éxito del día. Mencioná brevemente las cotizaciones, el clima, los eventos económicos importantes del día y los reminders si los hay.
 `;
 
         const messages: Message[] = [{ role: 'user', content: promptText }];

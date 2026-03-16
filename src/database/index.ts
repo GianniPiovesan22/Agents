@@ -40,6 +40,19 @@ localDb.exec(`
     updated_at INTEGER NOT NULL,
     UNIQUE(user_id, key)
   );
+  CREATE TABLE IF NOT EXISTS forex_events (
+    id TEXT PRIMARY KEY,
+    event_date TEXT NOT NULL,
+    event_time TEXT,
+    currency TEXT,
+    event_name TEXT NOT NULL,
+    impact TEXT NOT NULL,
+    forecast TEXT,
+    previous TEXT,
+    actual TEXT,
+    notified INTEGER DEFAULT 0,
+    fetched_at TEXT NOT NULL
+  );
 `);
 
 /**
@@ -258,6 +271,74 @@ export function getUserProfile(userId: string): Record<string, string> {
   } catch (e) {
     console.error("User Profile Read Error:", e);
     return {};
+  }
+}
+
+export interface ForexEvent {
+  id: string;
+  event_date: string;
+  event_time?: string;
+  currency?: string;
+  event_name: string;
+  impact: string;
+  forecast?: string;
+  previous?: string;
+  actual?: string;
+  fetched_at: string;
+}
+
+export function saveForexEvents(events: ForexEvent[]): void {
+  try {
+    const stmt = localDb.prepare(`
+      INSERT OR REPLACE INTO forex_events
+        (id, event_date, event_time, currency, event_name, impact, forecast, previous, actual, notified, fetched_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
+    `);
+    for (const e of events) {
+      stmt.run(
+        e.id,
+        e.event_date,
+        e.event_time ?? null,
+        e.currency ?? null,
+        e.event_name,
+        e.impact,
+        e.forecast ?? null,
+        e.previous ?? null,
+        e.actual ?? null,
+        e.fetched_at
+      );
+    }
+  } catch (err) {
+    console.error("saveForexEvents error:", err);
+  }
+}
+
+export function getUpcomingHighImpactEvents(minutesAhead: number): ForexEvent[] {
+  try {
+    const now = new Date();
+    const future = new Date(now.getTime() + minutesAhead * 60 * 1000);
+    // Events where event_date + event_time falls within [now, now+minutesAhead]
+    // Stored as ISO strings or "HH:MM" time on a date string — we compare concatenated datetime
+    const stmt = localDb.prepare(`
+      SELECT * FROM forex_events
+      WHERE impact = 'High'
+        AND notified = 0
+        AND (event_date || 'T' || COALESCE(event_time, '00:00') || ':00') >= ?
+        AND (event_date || 'T' || COALESCE(event_time, '00:00') || ':00') <= ?
+    `);
+    return stmt.all(now.toISOString(), future.toISOString()) as ForexEvent[];
+  } catch (err) {
+    console.error("getUpcomingHighImpactEvents error:", err);
+    return [];
+  }
+}
+
+export function markForexEventNotified(id: string): void {
+  try {
+    const stmt = localDb.prepare('UPDATE forex_events SET notified = 1 WHERE id = ?');
+    stmt.run(id);
+  } catch (err) {
+    console.error("markForexEventNotified error:", err);
   }
 }
 

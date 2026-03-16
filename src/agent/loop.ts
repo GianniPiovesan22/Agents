@@ -16,6 +16,7 @@ import '../tools/terminal.js';
 import '../tools/github.js';
 import '../tools/browser.js';
 import '../tools/user_profile.js';
+import '../tools/forex_factory.js';
 
 const MAX_ITERATIONS = 3;
 
@@ -62,6 +63,8 @@ You have access to the following tools to help the user:
 **Market Quotes:**
 - get_dollar_rates: Argentine dollar exchange rates (blue, oficial, MEP, CCL)
 - get_crypto_prices: Cryptocurrency prices (Bitcoin, Ethereum, Solana, etc.)
+- get_economic_calendar: Fetch Forex Factory economic calendar with upcoming events filtered by impact (high/medium/low/all) and days ahead
+- get_forex_news: Fetch the latest forex news from Forex Factory (top 10 items)
 
 **Social Content:**
 - get_social_content_guide: Get the Social Content strategy guide, templates, and hook formulas for social media
@@ -83,7 +86,17 @@ RULES:
 4. When generating images, ONLY use the generate_image tool. Return the result exactly as received.
 5. Always respond in Spanish unless the user writes in another language
 6. For Gmail search, use queries like "newer_than:1d", "is:unread", "from:email"
-7. For calendar, use "primary" as calendar_id unless specified`
+7. For calendar, use "primary" as calendar_id unless specified
+
+FORMATTING (CRITICAL):
+- You are responding in a Telegram chat. Write in clean, conversational plain text.
+- NEVER use markdown headers (#, ##, ###)
+- NEVER use bold markers (**text** or __text__)
+- NEVER use italic markers (*text* or _text_)
+- NEVER use horizontal rules (---, ***)
+- For lists, use emojis as bullets (📌, •, ➤) instead of - or *
+- For structure and emphasis, use emojis naturally
+- Keep responses concise and chat-friendly, not like a document`
         }
     ];
 
