@@ -655,4 +655,279 @@ registerTool({
     },
 });
 
-console.log('Google Workspace tools registered (Gmail, Calendar, Drive, Contacts, Sheets, Docs)');
+// ═══════════════════════════════════════════════════════════════
+// GMAIL REPLY
+// ═══════════════════════════════════════════════════════════════
+
+registerTool({
+    definition: {
+        type: 'function',
+        function: {
+            name: 'gmail_reply',
+            description: 'Reply to an existing Gmail thread. Fetches the last message in the thread and sends a reply with proper In-Reply-To and References headers.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    thread_id: {
+                        type: 'string',
+                        description: 'The Gmail thread ID to reply to'
+                    },
+                    body: {
+                        type: 'string',
+                        description: 'The reply body text (plain text)'
+                    }
+                },
+                required: ['thread_id', 'body'],
+            },
+        },
+    },
+    execute: async (args) => {
+        try {
+            const auth = getGoogleAuth();
+            const gmail = google.gmail({ version: 'v1', auth });
+
+            // Get the last message in the thread
+            const threadRes = await gmail.users.threads.get({
+                userId: 'me',
+                id: args.thread_id,
+                format: 'metadata',
+                metadataHeaders: ['Subject', 'From', 'To', 'Message-ID', 'References'],
+            });
+
+            const messages = threadRes.data.messages;
+            if (!messages || messages.length === 0) {
+                return `Error: No messages found in thread ${args.thread_id}`;
+            }
+
+            const lastMsg = messages[messages.length - 1];
+            const headers = lastMsg.payload?.headers ?? [];
+            const get = (name: string) => headers.find(h => h.name === name)?.value ?? '';
+
+            const subject = get('Subject');
+            const from = get('From');
+            const messageId = get('Message-ID');
+            const references = get('References');
+
+            // Build reply — send back to the original sender
+            const replySubject = subject.startsWith('Re:') ? subject : `Re: ${subject}`;
+            const newReferences = references
+                ? `${references} ${messageId}`
+                : messageId;
+
+            const rawLines = [
+                `To: ${from}`,
+                `Subject: ${replySubject}`,
+                `In-Reply-To: ${messageId}`,
+                `References: ${newReferences}`,
+                `Content-Type: text/plain; charset=utf-8`,
+                `MIME-Version: 1.0`,
+                '',
+                args.body,
+            ];
+
+            const raw = Buffer.from(rawLines.join('\r\n'))
+                .toString('base64')
+                .replace(/\+/g, '-')
+                .replace(/\//g, '_')
+                .replace(/=+$/, '');
+
+            await gmail.users.messages.send({
+                userId: 'me',
+                requestBody: { raw, threadId: args.thread_id },
+            });
+
+            return `Respuesta enviada correctamente al hilo ${args.thread_id}.`;
+        } catch (error: any) {
+            if (isNotConfigured(error)) return NOT_CONFIGURED;
+            return `Error replying to thread: ${error.message}`;
+        }
+    },
+});
+
+// ═══════════════════════════════════════════════════════════════
+// CREATE GOOGLE DOC
+// ═══════════════════════════════════════════════════════════════
+
+registerTool({
+    definition: {
+        type: 'function',
+        function: {
+            name: 'create_google_doc',
+            description: 'Create a new Google Docs document with a title and text content.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    title: {
+                        type: 'string',
+                        description: 'The title of the new document'
+                    },
+                    content: {
+                        type: 'string',
+                        description: 'The text content to insert into the document'
+                    }
+                },
+                required: ['title', 'content'],
+            },
+        },
+    },
+    execute: async (args) => {
+        try {
+            const auth = getGoogleAuth();
+            const docs = google.docs({ version: 'v1', auth });
+
+            // Create the document
+            const createRes = await docs.documents.create({
+                requestBody: { title: args.title },
+            });
+
+            const docId = createRes.data.documentId;
+            if (!docId) return 'Error: No se pudo obtener el ID del documento creado.';
+
+            // Insert the content
+            await docs.documents.batchUpdate({
+                documentId: docId,
+                requestBody: {
+                    requests: [
+                        {
+                            insertText: {
+                                location: { index: 1 },
+                                text: args.content,
+                            },
+                        },
+                    ],
+                },
+            });
+
+            return `Documento "${args.title}" creado correctamente. ID: ${docId}\nURL: https://docs.google.com/document/d/${docId}/edit`;
+        } catch (error: any) {
+            if (isNotConfigured(error)) return NOT_CONFIGURED;
+            return `Error creating Google Doc: ${error.message}`;
+        }
+    },
+});
+
+// ═══════════════════════════════════════════════════════════════
+// SHEETS WRITE
+// ═══════════════════════════════════════════════════════════════
+
+registerTool({
+    definition: {
+        type: 'function',
+        function: {
+            name: 'sheets_write',
+            description: 'Write data to a Google Sheets range. Values must be a JSON array of arrays, e.g. [["Name","Age"],["Ana","30"]].',
+            parameters: {
+                type: 'object',
+                properties: {
+                    spreadsheet_id: {
+                        type: 'string',
+                        description: 'The Google Sheets document ID (from the URL)'
+                    },
+                    range: {
+                        type: 'string',
+                        description: 'The range to write to (e.g. "Sheet1!A1:B2")'
+                    },
+                    values: {
+                        type: 'string',
+                        description: 'JSON string of an array of arrays representing rows and columns (e.g. \'[["A","B"],["1","2"]]\')'
+                    }
+                },
+                required: ['spreadsheet_id', 'range', 'values'],
+            },
+        },
+    },
+    execute: async (args) => {
+        try {
+            const auth = getGoogleAuth();
+            const sheets = google.sheets({ version: 'v4', auth });
+
+            let parsedValues: any[][];
+            try {
+                parsedValues = JSON.parse(args.values);
+            } catch {
+                return 'Error: el parámetro "values" no es un JSON válido de arrays.';
+            }
+
+            const res = await sheets.spreadsheets.values.update({
+                spreadsheetId: args.spreadsheet_id,
+                range: args.range,
+                valueInputOption: 'USER_ENTERED',
+                requestBody: { values: parsedValues },
+            });
+
+            return `Datos escritos correctamente. Celdas actualizadas: ${res.data.updatedCells ?? 0}`;
+        } catch (error: any) {
+            if (isNotConfigured(error)) return NOT_CONFIGURED;
+            return `Error writing to Sheets: ${error.message}`;
+        }
+    },
+});
+
+// ═══════════════════════════════════════════════════════════════
+// CALENDAR UPDATE EVENT
+// ═══════════════════════════════════════════════════════════════
+
+registerTool({
+    definition: {
+        type: 'function',
+        function: {
+            name: 'calendar_update_event',
+            description: 'Update an existing Google Calendar event. Only the fields you provide will be changed.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    event_id: {
+                        type: 'string',
+                        description: 'The ID of the calendar event to update'
+                    },
+                    summary: {
+                        type: 'string',
+                        description: 'New title/summary for the event (optional)'
+                    },
+                    start_time: {
+                        type: 'string',
+                        description: 'New start time in ISO 8601 format (optional)'
+                    },
+                    end_time: {
+                        type: 'string',
+                        description: 'New end time in ISO 8601 format (optional)'
+                    },
+                    description: {
+                        type: 'string',
+                        description: 'New description for the event (optional)'
+                    }
+                },
+                required: ['event_id'],
+            },
+        },
+    },
+    execute: async (args) => {
+        try {
+            const auth = getGoogleAuth();
+            const calendar = google.calendar({ version: 'v3', auth });
+
+            const patch: Record<string, any> = {};
+            if (args.summary) patch.summary = args.summary;
+            if (args.description) patch.description = args.description;
+            if (args.start_time) patch.start = { dateTime: args.start_time };
+            if (args.end_time) patch.end = { dateTime: args.end_time };
+
+            if (Object.keys(patch).length === 0) {
+                return 'No se proporcionaron campos para actualizar.';
+            }
+
+            const res = await calendar.events.patch({
+                calendarId: 'primary',
+                eventId: args.event_id,
+                requestBody: patch,
+            });
+
+            return `Evento actualizado correctamente. Título: "${res.data.summary}"`;
+        } catch (error: any) {
+            if (isNotConfigured(error)) return NOT_CONFIGURED;
+            return `Error updating calendar event: ${error.message}`;
+        }
+    },
+});
+
+console.log('Google Workspace tools registered (Gmail, Calendar, Drive, Contacts, Sheets, Docs, + new tools)');

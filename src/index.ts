@@ -5,6 +5,8 @@ import cron from 'node-cron';
 import { getPendingReminders, markReminderSent } from './database/index.js';
 import { bot } from './bot/index.js';
 import { sendDailyDigest } from './agent/daily_digest.js';
+import { sendWeeklyDigest } from './agent/weekly_digest.js';
+import { checkProactiveAlerts } from './agent/proactive_alerts.js';
 
 async function main() {
     try {
@@ -41,6 +43,20 @@ async function main() {
             await sendDailyDigest();
         });
         console.log("🌅 Cron job for Daily Digest initialized (08:30 AM)");
+
+        // Weekly Digest Setup (runs every Sunday at 9:00 AM)
+        cron.schedule('0 9 * * 0', async () => {
+            await sendWeeklyDigest();
+        });
+        console.log("📅 Cron job for Weekly Digest initialized (Sunday 09:00 AM)");
+
+        // Proactive Alerts (runs every 5 minutes)
+        cron.schedule('*/5 * * * *', async () => {
+            for (const userId of config.TELEGRAM_ALLOWED_USER_IDS) {
+                await checkProactiveAlerts(userId);
+            }
+        });
+        console.log("🔔 Cron job for Proactive Alerts initialized (every 5 minutes)");
 
     } catch (error) {
         console.error("Critical failure during startup:", error);

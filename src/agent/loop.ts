@@ -1,6 +1,6 @@
 import { getCompletion, Message, CompletionResult, getEmbedding } from '../llm/index.js';
 import { getToolsDefinitions, executeTool } from '../tools/index.js';
-import { getAllEmbeddings, saveEmbedding } from '../database/index.js';
+import { getAllEmbeddings, saveEmbedding, getUserProfile } from '../database/index.js';
 import '../tools/get_current_time.js';
 import '../tools/google_workspace.js';
 import '../tools/web_search.js';
@@ -15,6 +15,7 @@ import '../tools/youtube.js';
 import '../tools/terminal.js';
 import '../tools/github.js';
 import '../tools/browser.js';
+import '../tools/user_profile.js';
 
 const MAX_ITERATIONS = 3;
 
@@ -28,11 +29,15 @@ You have access to the following tools to help the user:
 
 **Google Workspace:**
 - Gmail: Search emails, send emails, create drafts
+- gmail_reply: Reply to an email thread
 - Google Calendar: List events, create events (use "primary" as calendar_id)
+- calendar_update_event: Update an existing calendar event
 - Google Drive: Search files, list folders
 - Google Contacts: List contacts
 - Google Sheets: Read spreadsheet data
+- sheets_write: Write data to a Google Sheets range
 - Google Docs: Read document content
+- create_google_doc: Create a new Google Doc with content
 
 **Web & Search:**
 - web_search: Search the internet for current information, news, real-time data
@@ -60,6 +65,10 @@ You have access to the following tools to help the user:
 
 **Social Content:**
 - get_social_content_guide: Get the Social Content strategy guide, templates, and hook formulas for social media
+
+**User Memory:**
+- remember_about_user: Save facts or preferences about the user for future conversations
+- get_user_info: Retrieve stored facts about the user
 
 **Utilities:**
 - get_current_time: Get the current local time
@@ -106,6 +115,17 @@ RULES:
         console.error("Semantic memory lookup failed", e);
     }
 
+    // Inject user profile
+    try {
+        const userProfile = getUserProfile(userId);
+        if (Object.keys(userProfile).length > 0) {
+            const profileText = Object.entries(userProfile).map(([k, v]) => `${k}: ${v}`).join('\n');
+            messages.push({ role: 'system', content: `USER PROFILE (facts about this user):\n${profileText}` });
+        }
+    } catch (e) {
+        console.error("User profile lookup failed", e);
+    }
+
     messages = messages.concat(history);
 
     for (let i = 0; i < MAX_ITERATIONS; i++) {
@@ -126,9 +146,9 @@ RULES:
         for (const toolCall of response.tool_calls) {
             console.log(`🔧 Tool call: ${toolCall.name}(${typeof toolCall.arguments === 'string' ? toolCall.arguments : JSON.stringify(toolCall.arguments)})`);
 
-            // Inject userId for notes tools
+            // Inject userId for notes and user profile tools
             let args = typeof toolCall.arguments === 'string' ? JSON.parse(toolCall.arguments) : { ...toolCall.arguments };
-            if (['save_note', 'list_notes', 'search_notes', 'delete_note', 'create_reminder'].includes(toolCall.name)) {
+            if (['save_note', 'list_notes', 'search_notes', 'delete_note', 'create_reminder', 'remember_about_user', 'get_user_info'].includes(toolCall.name)) {
                 args._userId = userId;
             }
 
