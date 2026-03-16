@@ -19,6 +19,9 @@ const configSchema = z.object({
     ELEVENLABS_API_KEY: z.string().optional(),
     ELEVENLABS_VOICE_ID: z.string().default("p7AwDmKvTdoHTBuueGvP"),
     GOG_ACCOUNT: z.string().optional(),
+    GOOGLE_CLIENT_ID: z.string().optional(),
+    GOOGLE_CLIENT_SECRET: z.string().optional(),
+    GOOGLE_REFRESH_TOKEN: z.string().optional(),
     // WhatsApp Cloud API
     WHATSAPP_ACCESS_TOKEN: z.string().optional(),
     WHATSAPP_PHONE_NUMBER_ID: z.string().optional(),

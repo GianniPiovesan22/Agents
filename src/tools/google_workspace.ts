@@ -1,5 +1,12 @@
 import { registerTool } from './index.js';
-import { runGog } from '../google/gog.js';
+import { getGoogleAuth } from '../google/auth.js';
+import { google } from 'googleapis';
+
+const NOT_CONFIGURED = 'Google Workspace no configurado. Contactá al admin.';
+
+function isNotConfigured(err: unknown): boolean {
+    return err instanceof Error && err.message.includes('Google auth not configured');
+}
 
 // ═══════════════════════════════════════════════════════════════
 // GMAIL TOOLS
@@ -25,9 +32,44 @@ registerTool({
     },
     execute: async (args) => {
         try {
-            const result = await runGog(['gmail', 'search', args.query, '--max', '10']);
-            return result || 'No emails found matching your search.';
+            const auth = getGoogleAuth();
+            const gmail = google.gmail({ version: 'v1', auth });
+
+            const listRes = await gmail.users.threads.list({
+                userId: 'me',
+                q: args.query,
+                maxResults: 10,
+            });
+
+            const threads = listRes.data.threads;
+            if (!threads || threads.length === 0) {
+                return 'No emails found matching your search.';
+            }
+
+            const lines: string[] = [`Found ${threads.length} thread(s):\n`];
+
+            for (const thread of threads) {
+                const threadRes = await gmail.users.threads.get({
+                    userId: 'me',
+                    id: thread.id!,
+                    format: 'metadata',
+                    metadataHeaders: ['Subject', 'From', 'Date'],
+                });
+
+                const msg = threadRes.data.messages?.[0];
+                const headers = msg?.payload?.headers ?? [];
+                const get = (name: string) => headers.find(h => h.name === name)?.value ?? '(unknown)';
+
+                lines.push(`- Subject: ${get('Subject')}`);
+                lines.push(`  From: ${get('From')}`);
+                lines.push(`  Date: ${get('Date')}`);
+                lines.push(`  Thread ID: ${thread.id}`);
+                lines.push('');
+            }
+
+            return lines.join('\n');
         } catch (error: any) {
+            if (isNotConfigured(error)) return NOT_CONFIGURED;
             return `Error searching Gmail: ${error.message}`;
         }
     },
@@ -53,9 +95,45 @@ registerTool({
     },
     execute: async (args) => {
         try {
-            const result = await runGog(['gmail', 'messages', 'search', args.query, '--max', '10']);
-            return result || 'No messages found.';
+            const auth = getGoogleAuth();
+            const gmail = google.gmail({ version: 'v1', auth });
+
+            const listRes = await gmail.users.messages.list({
+                userId: 'me',
+                q: args.query,
+                maxResults: 10,
+            });
+
+            const messages = listRes.data.messages;
+            if (!messages || messages.length === 0) {
+                return 'No messages found.';
+            }
+
+            const lines: string[] = [`Found ${messages.length} message(s):\n`];
+
+            for (const msg of messages) {
+                const msgRes = await gmail.users.messages.get({
+                    userId: 'me',
+                    id: msg.id!,
+                    format: 'metadata',
+                    metadataHeaders: ['Subject', 'From', 'Date'],
+                });
+
+                const headers = msgRes.data.payload?.headers ?? [];
+                const get = (name: string) => headers.find(h => h.name === name)?.value ?? '(unknown)';
+                const snippet = msgRes.data.snippet ?? '';
+
+                lines.push(`- Subject: ${get('Subject')}`);
+                lines.push(`  From: ${get('From')}`);
+                lines.push(`  Date: ${get('Date')}`);
+                lines.push(`  Snippet: ${snippet}`);
+                lines.push(`  Message ID: ${msg.id}`);
+                lines.push('');
+            }
+
+            return lines.join('\n');
         } catch (error: any) {
+            if (isNotConfigured(error)) return NOT_CONFIGURED;
             return `Error searching messages: ${error.message}`;
         }
     },
@@ -93,15 +171,33 @@ registerTool({
     },
     execute: async (args) => {
         try {
-            const cmdArgs = ['gmail', 'send', '--to', args.to, '--subject', args.subject];
-            if (args.html) {
-                cmdArgs.push('--body-html', args.body);
-            } else {
-                cmdArgs.push('--body', args.body);
-            }
-            const result = await runGog(cmdArgs);
-            return `✅ Email sent successfully to ${args.to}. ${result}`;
+            const auth = getGoogleAuth();
+            const gmail = google.gmail({ version: 'v1', auth });
+
+            const contentType = args.html ? 'text/html' : 'text/plain';
+            const raw = [
+                `To: ${args.to}`,
+                `Subject: ${args.subject}`,
+                `Content-Type: ${contentType}; charset=utf-8`,
+                `MIME-Version: 1.0`,
+                '',
+                args.body,
+            ].join('\r\n');
+
+            const encoded = Buffer.from(raw)
+                .toString('base64')
+                .replace(/\+/g, '-')
+                .replace(/\//g, '_')
+                .replace(/=+$/, '');
+
+            await gmail.users.messages.send({
+                userId: 'me',
+                requestBody: { raw: encoded },
+            });
+
+            return `Email sent successfully to ${args.to}.`;
         } catch (error: any) {
+            if (isNotConfigured(error)) return NOT_CONFIGURED;
             return `Error sending email: ${error.message}`;
         }
     },
@@ -135,9 +231,32 @@ registerTool({
     },
     execute: async (args) => {
         try {
-            const result = await runGog(['gmail', 'drafts', 'create', '--to', args.to, '--subject', args.subject, '--body', args.body]);
-            return `✅ Draft created successfully. ${result}`;
+            const auth = getGoogleAuth();
+            const gmail = google.gmail({ version: 'v1', auth });
+
+            const raw = [
+                `To: ${args.to}`,
+                `Subject: ${args.subject}`,
+                `Content-Type: text/plain; charset=utf-8`,
+                `MIME-Version: 1.0`,
+                '',
+                args.body,
+            ].join('\r\n');
+
+            const encoded = Buffer.from(raw)
+                .toString('base64')
+                .replace(/\+/g, '-')
+                .replace(/\//g, '_')
+                .replace(/=+$/, '');
+
+            const res = await gmail.users.drafts.create({
+                userId: 'me',
+                requestBody: { message: { raw: encoded } },
+            });
+
+            return `Draft created successfully. Draft ID: ${res.data.id}`;
         } catch (error: any) {
+            if (isNotConfigured(error)) return NOT_CONFIGURED;
             return `Error creating draft: ${error.message}`;
         }
     },
@@ -175,9 +294,39 @@ registerTool({
     },
     execute: async (args) => {
         try {
-            const result = await runGog(['calendar', 'events', args.calendar_id, '--from', args.from, '--to', args.to]);
-            return result || 'No events found for that date range.';
+            const auth = getGoogleAuth();
+            const calendar = google.calendar({ version: 'v3', auth });
+
+            const res = await calendar.events.list({
+                calendarId: args.calendar_id,
+                timeMin: args.from,
+                timeMax: args.to,
+                singleEvents: true,
+                orderBy: 'startTime',
+                maxResults: 20,
+            });
+
+            const events = res.data.items;
+            if (!events || events.length === 0) {
+                return 'No events found for that date range.';
+            }
+
+            const lines: string[] = [`Found ${events.length} event(s):\n`];
+
+            for (const event of events) {
+                const start = event.start?.dateTime ?? event.start?.date ?? '(no start)';
+                const end = event.end?.dateTime ?? event.end?.date ?? '(no end)';
+                lines.push(`- ${event.summary ?? '(no title)'}`);
+                lines.push(`  Start: ${start}`);
+                lines.push(`  End:   ${end}`);
+                if (event.description) lines.push(`  Description: ${event.description}`);
+                if (event.location) lines.push(`  Location: ${event.location}`);
+                lines.push('');
+            }
+
+            return lines.join('\n');
         } catch (error: any) {
+            if (isNotConfigured(error)) return NOT_CONFIGURED;
             return `Error listing calendar events: ${error.message}`;
         }
     },
@@ -219,13 +368,22 @@ registerTool({
     },
     execute: async (args) => {
         try {
-            const cmdArgs = ['calendar', 'create', args.calendar_id, '--summary', args.summary, '--from', args.from, '--to', args.to];
-            if (args.description) {
-                cmdArgs.push('--description', args.description);
-            }
-            const result = await runGog(cmdArgs);
-            return `✅ Event "${args.summary}" created. ${result}`;
+            const auth = getGoogleAuth();
+            const calendar = google.calendar({ version: 'v3', auth });
+
+            const res = await calendar.events.insert({
+                calendarId: args.calendar_id,
+                requestBody: {
+                    summary: args.summary,
+                    description: args.description,
+                    start: { dateTime: args.from },
+                    end: { dateTime: args.to },
+                },
+            });
+
+            return `Event "${args.summary}" created. Event ID: ${res.data.id}`;
         } catch (error: any) {
+            if (isNotConfigured(error)) return NOT_CONFIGURED;
             return `Error creating event: ${error.message}`;
         }
     },
@@ -255,9 +413,32 @@ registerTool({
     },
     execute: async (args) => {
         try {
-            const result = await runGog(['drive', 'search', args.query, '--max', '10']);
-            return result || 'No files found matching your search.';
+            const auth = getGoogleAuth();
+            const drive = google.drive({ version: 'v3', auth });
+
+            const res = await drive.files.list({
+                q: `fullText contains '${args.query.replace(/'/g, "\\'")}' and trashed = false`,
+                pageSize: 10,
+                fields: 'files(id, name, mimeType, modifiedTime, size)',
+            });
+
+            const files = res.data.files;
+            if (!files || files.length === 0) {
+                return 'No files found matching your search.';
+            }
+
+            const lines: string[] = [`Found ${files.length} file(s):\n`];
+            for (const file of files) {
+                lines.push(`- ${file.name ?? '(unnamed)'}`);
+                lines.push(`  Type: ${file.mimeType ?? '(unknown)'}`);
+                lines.push(`  Modified: ${file.modifiedTime ?? '(unknown)'}`);
+                lines.push(`  ID: ${file.id}`);
+                lines.push('');
+            }
+
+            return lines.join('\n');
         } catch (error: any) {
+            if (isNotConfigured(error)) return NOT_CONFIGURED;
             return `Error searching Drive: ${error.message}`;
         }
     },
@@ -283,12 +464,33 @@ registerTool({
     },
     execute: async (args) => {
         try {
-            const cmdArgs = ['drive', 'ls'];
-            if (args.folder_id) cmdArgs.push(args.folder_id);
-            cmdArgs.push('--max', '20');
-            const result = await runGog(cmdArgs);
-            return result || 'No files found.';
+            const auth = getGoogleAuth();
+            const drive = google.drive({ version: 'v3', auth });
+
+            const parentId = args.folder_id ?? 'root';
+            const res = await drive.files.list({
+                q: `'${parentId}' in parents and trashed = false`,
+                pageSize: 20,
+                fields: 'files(id, name, mimeType, modifiedTime)',
+            });
+
+            const files = res.data.files;
+            if (!files || files.length === 0) {
+                return 'No files found.';
+            }
+
+            const lines: string[] = [`Found ${files.length} file(s):\n`];
+            for (const file of files) {
+                lines.push(`- ${file.name ?? '(unnamed)'}`);
+                lines.push(`  Type: ${file.mimeType ?? '(unknown)'}`);
+                lines.push(`  Modified: ${file.modifiedTime ?? '(unknown)'}`);
+                lines.push(`  ID: ${file.id}`);
+                lines.push('');
+            }
+
+            return lines.join('\n');
         } catch (error: any) {
+            if (isNotConfigured(error)) return NOT_CONFIGURED;
             return `Error listing Drive files: ${error.message}`;
         }
     },
@@ -313,9 +515,33 @@ registerTool({
     },
     execute: async () => {
         try {
-            const result = await runGog(['contacts', 'list', '--max', '20']);
-            return result || 'No contacts found.';
+            const auth = getGoogleAuth();
+            const people = google.people({ version: 'v1', auth });
+
+            const res = await people.otherContacts.list({
+                pageSize: 20,
+                readMask: 'names,emailAddresses,phoneNumbers',
+            });
+
+            const contacts = res.data.otherContacts;
+            if (!contacts || contacts.length === 0) {
+                return 'No contacts found.';
+            }
+
+            const lines: string[] = [`Found ${contacts.length} contact(s):\n`];
+            for (const contact of contacts) {
+                const name = contact.names?.[0]?.displayName ?? '(no name)';
+                const email = contact.emailAddresses?.[0]?.value ?? '(no email)';
+                const phone = contact.phoneNumbers?.[0]?.value ?? '';
+                lines.push(`- ${name}`);
+                lines.push(`  Email: ${email}`);
+                if (phone) lines.push(`  Phone: ${phone}`);
+                lines.push('');
+            }
+
+            return lines.join('\n');
         } catch (error: any) {
+            if (isNotConfigured(error)) return NOT_CONFIGURED;
             return `Error listing contacts: ${error.message}`;
         }
     },
@@ -349,9 +575,27 @@ registerTool({
     },
     execute: async (args) => {
         try {
-            const result = await runGog(['sheets', 'get', args.sheet_id, args.range, '--json']);
-            return result || 'No data found in that range.';
+            const auth = getGoogleAuth();
+            const sheets = google.sheets({ version: 'v4', auth });
+
+            const res = await sheets.spreadsheets.values.get({
+                spreadsheetId: args.sheet_id,
+                range: args.range,
+            });
+
+            const values = res.data.values;
+            if (!values || values.length === 0) {
+                return 'No data found in that range.';
+            }
+
+            const lines: string[] = [];
+            for (const row of values) {
+                lines.push(row.join('\t'));
+            }
+
+            return lines.join('\n');
         } catch (error: any) {
+            if (isNotConfigured(error)) return NOT_CONFIGURED;
             return `Error reading sheet: ${error.message}`;
         }
     },
@@ -381,12 +625,34 @@ registerTool({
     },
     execute: async (args) => {
         try {
-            const result = await runGog(['docs', 'cat', args.doc_id]);
-            return result || 'Document is empty.';
+            const auth = getGoogleAuth();
+            const docs = google.docs({ version: 'v1', auth });
+
+            const res = await docs.documents.get({ documentId: args.doc_id });
+
+            const content = res.data.body?.content;
+            if (!content || content.length === 0) {
+                return 'Document is empty.';
+            }
+
+            const textParts: string[] = [];
+
+            for (const element of content) {
+                if (element.paragraph) {
+                    const paraText = (element.paragraph.elements ?? [])
+                        .map(el => el.textRun?.content ?? '')
+                        .join('');
+                    textParts.push(paraText);
+                }
+            }
+
+            const text = textParts.join('').trim();
+            return text || 'Document is empty.';
         } catch (error: any) {
+            if (isNotConfigured(error)) return NOT_CONFIGURED;
             return `Error reading document: ${error.message}`;
         }
     },
 });
 
-console.log('🔌 Google Workspace tools registered (Gmail, Calendar, Drive, Contacts, Sheets, Docs)');
+console.log('Google Workspace tools registered (Gmail, Calendar, Drive, Contacts, Sheets, Docs)');
