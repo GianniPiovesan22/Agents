@@ -7,8 +7,9 @@ import Database from 'better-sqlite3';
 let firestore: FirebaseFirestore.Firestore | null = null;
 let localDb: any = null;
 
-// Initialize Local SQLite Fallback
-const localDbPath = path.resolve(process.cwd(), 'memory.db');
+// Initialize Local SQLite — uses persistent volume on Railway (/app/data), falls back to cwd
+const dataDir = process.env.DATA_DIR ?? process.cwd();
+const localDbPath = path.join(dataDir, 'memory.db');
 localDb = new Database(localDbPath);
 localDb.exec(`
   CREATE TABLE IF NOT EXISTS memory (
