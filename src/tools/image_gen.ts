@@ -32,33 +32,45 @@ registerTool({
     execute: async (args) => {
         if (!ai) return 'Error: Gemini API not configured. Set GEMINI_API_KEY.';
 
-        try {
-            const response = await ai.models.generateContent({
-                model: 'gemini-2.0-flash-preview-image-generation',
-                contents: [{ role: 'user', parts: [{ text: args.prompt }] }],
-                config: {
-                    responseModalities: ['TEXT', 'IMAGE'],
-                },
-            });
+        const models = [
+            'gemini-2.0-flash-exp',
+            'gemini-2.0-flash-preview-image-generation',
+            'gemini-2.5-flash-preview-image-generation',
+        ];
 
-            const parts = response.candidates?.[0]?.content?.parts ?? [];
-            const imagePart = parts.find((p: any) => p.inlineData?.mimeType?.startsWith('image/'));
+        for (const model of models) {
+            try {
+                console.log(`🖼️ Trying image generation with model: ${model}`);
+                const response = await ai.models.generateContent({
+                    model,
+                    contents: [{ role: 'user', parts: [{ text: args.prompt }] }],
+                    config: {
+                        responseModalities: ['TEXT', 'IMAGE'],
+                    },
+                });
 
-            if (!imagePart?.inlineData?.data) {
-                return 'No se pudo generar la imagen. Intentá con otra descripción.';
+                const parts = response.candidates?.[0]?.content?.parts ?? [];
+                console.log(`🖼️ Response parts: ${JSON.stringify(parts.map((p: any) => Object.keys(p)))}`);
+                const imagePart = parts.find((p: any) => p.inlineData?.mimeType?.startsWith('image/'));
+
+                if (!imagePart?.inlineData?.data) {
+                    console.log(`🖼️ No image part found for model ${model}, trying next...`);
+                    continue;
+                }
+
+                const mimeType = imagePart.inlineData.mimeType;
+                const ext = mimeType.includes('png') ? 'png' : 'jpg';
+                const tempPath = path.join(os.tmpdir(), `img_${Date.now()}.${ext}`);
+                const buffer = Buffer.from(imagePart.inlineData.data, 'base64');
+                fs.writeFileSync(tempPath, buffer);
+                console.log(`🖼️ Image saved to ${tempPath}`);
+                return `[IMG:${tempPath}]`;
+            } catch (error: any) {
+                console.error(`🖼️ Model ${model} failed: ${error.message}`);
             }
-
-            const mimeType = imagePart.inlineData.mimeType;
-            const ext = mimeType.includes('png') ? 'png' : 'jpg';
-            const tempPath = path.join(os.tmpdir(), `img_${Date.now()}.${ext}`);
-            const buffer = Buffer.from(imagePart.inlineData.data, 'base64');
-            fs.writeFileSync(tempPath, buffer);
-
-            return `[IMG:${tempPath}]`;
-        } catch (error: any) {
-            console.error('Image generation error:', error);
-            return `Error generando imagen: ${error.message}`;
         }
+
+        return 'Error generando imagen: ningún modelo disponible pudo generar la imagen. Verificá que tu Gemini API key tenga acceso a generación de imágenes.';
     },
 });
 
