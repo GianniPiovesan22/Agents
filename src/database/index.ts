@@ -106,7 +106,7 @@ export async function saveMessage(userId: string, role: string, content: string)
 /**
  * Retrieves history with automatic fallback.
  */
-export async function getHistory(userId: string, limit: number = 20) {
+export async function getHistory(userId: string, limit: number = 10) {
   // 1. Try Firebase First
   if (firestore) {
     try {
