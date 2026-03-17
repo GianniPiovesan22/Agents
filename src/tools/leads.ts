@@ -1,0 +1,345 @@
+import { registerTool } from './index.js';
+import { config } from '../config/index.js';
+import { saveLead, getLeads, searchLeads, updateLeadStatus, deleteLead } from '../database/index.js';
+import axios from 'axios';
+
+// ═══════════════════════════════════════════════════════════════
+// CRM & LEADS — BrescoPack Lead Scraping + Management
+// ═══════════════════════════════════════════════════════════════
+
+const STATUS_EMOJIS: Record<string, string> = {
+  nuevo: '🆕',
+  contactado: '📞',
+  interesado: '⭐',
+  propuesta_enviada: '📄',
+  cerrado: '✅',
+  descartado: '❌',
+};
+
+function extractEmails(text: string): string[] {
+  const regex = /[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}/g;
+  return [...new Set(text.match(regex) ?? [])];
+}
+
+function extractPhones(text: string): string[] {
+  // Argentine formats: +54..., 011-XXXX-XXXX, 0XXX-XXXXXX, (011) XXXX-XXXX, etc.
+  const regex = /(?:\+54[\s\-]?)?(?:0\d{2,4}[\s\-]?)?\d{6,10}/g;
+  const matches = text.match(regex) ?? [];
+  return [...new Set(matches.filter(m => m.replace(/\D/g, '').length >= 7))];
+}
+
+// ── search_leads_online ─────────────────────────────────────────
+registerTool({
+  definition: {
+    type: 'function',
+    function: {
+      name: 'search_leads_online',
+      description: 'Buscar empresas y leads online por industria y zona, guardarlos en el CRM. Útil para prospección comercial de BrescoPack.',
+      parameters: {
+        type: 'object',
+        properties: {
+          industry: {
+            type: 'string',
+            description: 'Industria o rubro a buscar (ej: "empaques alimentarios", "industria frigorífica", "agroindustria")',
+          },
+          location: {
+            type: 'string',
+            description: 'Zona geográfica (default: Argentina)',
+          },
+          max_results: {
+            type: 'number',
+            description: 'Cantidad máxima de leads a guardar (default: 10)',
+          },
+        },
+        required: ['industry'],
+      },
+    },
+  },
+  execute: async (args) => {
+    const industry: string = args.industry;
+    const location: string = args.location ?? 'Argentina';
+    const maxResults: number = args.max_results ?? 10;
+
+    const allResults: Array<{ title: string; url: string; content: string }> = [];
+
+    if (config.TAVILY_API_KEY) {
+      // Primary: Tavily
+      const queries = [
+        `"${industry}" empresas proveedores ${location} contacto email telefono`,
+        `"${industry}" distribuidores ${location} site:infonegocios.com OR site:guiaargentina.com.ar OR site:paginasamarillas.com.ar`,
+      ];
+
+      for (const q of queries) {
+        try {
+          const resp = await axios.post(
+            'https://api.tavily.com/search',
+            {
+              api_key: config.TAVILY_API_KEY,
+              query: q,
+              search_depth: 'basic',
+              max_results: Math.ceil(maxResults / 2),
+            },
+            { timeout: 15000 }
+          );
+          const results = resp.data?.results ?? [];
+          for (const r of results) {
+            allResults.push({ title: r.title ?? '', url: r.url ?? '', content: r.content ?? '' });
+          }
+        } catch (e: any) {
+          console.error('Tavily search error:', e.message);
+        }
+      }
+    } else {
+      // Fallback: Jina Reader on a Google search URL
+      const query = encodeURIComponent(`${industry} empresas ${location} contacto email`);
+      const jinaUrl = `https://r.jina.ai/https://www.google.com/search?q=${query}&num=20`;
+      try {
+        const resp = await axios.get(jinaUrl, { timeout: 20000 });
+        const text: string = resp.data ?? '';
+        // Parse rough company entries from the markdown
+        const lines = text.split('\n').filter(l => l.trim().length > 0);
+        for (const line of lines.slice(0, maxResults * 3)) {
+          allResults.push({ title: line.substring(0, 80), url: '', content: line });
+        }
+      } catch (e: any) {
+        return `Error buscando leads: ${e.message}`;
+      }
+    }
+
+    if (allResults.length === 0) {
+      return `No encontré resultados para "${industry}" en ${location}.`;
+    }
+
+    const seen = new Set<string>();
+    let saved = 0;
+
+    for (const item of allResults) {
+      if (saved >= maxResults) break;
+      const companyName = item.title.trim();
+      if (!companyName || seen.has(companyName.toLowerCase())) continue;
+      seen.add(companyName.toLowerCase());
+
+      const combinedText = `${item.title} ${item.content}`;
+      const emails = extractEmails(combinedText);
+      const phones = extractPhones(combinedText);
+
+      saveLead({
+        company_name: companyName,
+        email: emails[0] ?? undefined,
+        phone: phones[0] ?? undefined,
+        website: item.url || undefined,
+        industry,
+        location,
+        source: 'web_search',
+        status: 'nuevo',
+      });
+
+      saved++;
+    }
+
+    return `Encontré ${saved} leads para ${industry} en ${location}. Guardados en tu CRM.`;
+  },
+});
+
+// ── scrape_leads_from_url ───────────────────────────────────────
+registerTool({
+  definition: {
+    type: 'function',
+    function: {
+      name: 'scrape_leads_from_url',
+      description: 'Extraer contactos de una URL específica usando Jina Reader y guardarlos en el CRM.',
+      parameters: {
+        type: 'object',
+        properties: {
+          url: {
+            type: 'string',
+            description: 'URL de la página a scrapear (ej: página de directorio, cámara industrial, guía de proveedores)',
+          },
+          industry: {
+            type: 'string',
+            description: 'Industria o rubro para etiquetar los leads (opcional)',
+          },
+        },
+        required: ['url'],
+      },
+    },
+  },
+  execute: async (args) => {
+    const url: string = args.url;
+    const industry: string | undefined = args.industry;
+
+    let markdown = '';
+    try {
+      const resp = await axios.get(`https://r.jina.ai/${url}`, {
+        timeout: 25000,
+        headers: { Accept: 'text/plain' },
+      });
+      markdown = typeof resp.data === 'string' ? resp.data : JSON.stringify(resp.data);
+    } catch (e: any) {
+      return `Error scrapeando ${url}: ${e.message}`;
+    }
+
+    if (!markdown || markdown.trim().length === 0) {
+      return `No pude extraer contenido de ${url}.`;
+    }
+
+    const emails = extractEmails(markdown);
+    const phones = extractPhones(markdown);
+
+    // Try to extract company names: lines that look like headings or bold text
+    const companyRegex = /^(?:#{1,3}\s+|[*_]{1,2})(.{5,80})(?:[*_]{0,2})\s*$/gm;
+    const companyMatches: string[] = [];
+    let m: RegExpExecArray | null;
+    while ((m = companyRegex.exec(markdown)) !== null) {
+      const candidate = m[1].trim();
+      if (candidate && !candidate.startsWith('http') && companyMatches.length < 30) {
+        companyMatches.push(candidate);
+      }
+    }
+
+    // Build leads by pairing company names with extracted contact info
+    // Each unique company gets its own lead; leftover emails/phones go to generic leads
+    const saved: number[] = [];
+    const maxToSave = Math.max(companyMatches.length, emails.length, 1);
+
+    for (let i = 0; i < maxToSave && i < 30; i++) {
+      const companyName = companyMatches[i] ?? (emails[i] ? emails[i].split('@')[1] : `Contacto desde ${new URL(url.startsWith('http') ? url : `https://${url}`).hostname}`);
+      const email = emails[i] ?? undefined;
+      const phone = phones[i] ?? undefined;
+
+      if (!email && !phone && !companyMatches[i]) continue;
+
+      const id = saveLead({
+        company_name: companyName,
+        email,
+        phone,
+        website: url,
+        industry,
+        source: 'web_scrape',
+        status: 'nuevo',
+      });
+      if (id > 0) saved.push(id);
+    }
+
+    if (saved.length === 0) {
+      return `No encontré contactos útiles en ${url}.`;
+    }
+
+    return `Extraje ${saved.length} contactos de ${url}. Guardados en tu CRM.`;
+  },
+});
+
+// ── get_leads ───────────────────────────────────────────────────
+registerTool({
+  definition: {
+    type: 'function',
+    function: {
+      name: 'get_leads',
+      description: 'Ver los leads del CRM, filtrar por estado o buscar por nombre/industria/ubicación.',
+      parameters: {
+        type: 'object',
+        properties: {
+          status: {
+            type: 'string',
+            description: 'Filtrar por estado del lead',
+            enum: ['nuevo', 'contactado', 'interesado', 'propuesta_enviada', 'cerrado', 'descartado'],
+          },
+          search: {
+            type: 'string',
+            description: 'Texto a buscar en nombre de empresa, industria o ubicación',
+          },
+        },
+        required: [],
+      },
+    },
+  },
+  execute: async (args) => {
+    const leads = args.search
+      ? searchLeads(args.search)
+      : getLeads(args.status);
+
+    if (leads.length === 0) {
+      return 'No tenés leads guardados aún.';
+    }
+
+    const lines: string[] = [`Leads en CRM (${leads.length}):\n`];
+
+    for (const lead of leads) {
+      const emoji = STATUS_EMOJIS[lead.status] ?? '🔵';
+      const parts: string[] = [`${emoji} [${lead.id}] ${lead.company_name}`];
+      if (lead.industry) parts.push(`Rubro: ${lead.industry}`);
+      if (lead.location) parts.push(`Zona: ${lead.location}`);
+      if (lead.contact_name) parts.push(`Contacto: ${lead.contact_name}`);
+      if (lead.email) parts.push(`Email: ${lead.email}`);
+      if (lead.phone) parts.push(`Tel: ${lead.phone}`);
+      if (lead.website) parts.push(`Web: ${lead.website}`);
+      parts.push(`Estado: ${lead.status}`);
+      if (lead.notes) parts.push(`Notas: ${lead.notes}`);
+      lines.push(parts.join(' | '));
+    }
+
+    return lines.join('\n');
+  },
+});
+
+// ── update_lead ─────────────────────────────────────────────────
+registerTool({
+  definition: {
+    type: 'function',
+    function: {
+      name: 'update_lead',
+      description: 'Actualizar el estado de un lead en el CRM y opcionalmente agregar notas.',
+      parameters: {
+        type: 'object',
+        properties: {
+          id: {
+            type: 'number',
+            description: 'ID del lead a actualizar',
+          },
+          status: {
+            type: 'string',
+            description: 'Nuevo estado del lead',
+            enum: ['nuevo', 'contactado', 'interesado', 'propuesta_enviada', 'cerrado', 'descartado'],
+          },
+          notes: {
+            type: 'string',
+            description: 'Notas adicionales sobre el lead (opcional)',
+          },
+        },
+        required: ['id', 'status'],
+      },
+    },
+  },
+  execute: async (args) => {
+    updateLeadStatus(args.id, args.status, args.notes);
+    const emoji = STATUS_EMOJIS[args.status] ?? '🔵';
+    return `${emoji} Lead #${args.id} actualizado a estado: ${args.status}${args.notes ? ` | Notas: ${args.notes}` : ''}`;
+  },
+});
+
+// ── delete_lead ─────────────────────────────────────────────────
+registerTool({
+  definition: {
+    type: 'function',
+    function: {
+      name: 'delete_lead',
+      description: 'Eliminar un lead del CRM por ID.',
+      parameters: {
+        type: 'object',
+        properties: {
+          id: {
+            type: 'number',
+            description: 'ID del lead a eliminar',
+          },
+        },
+        required: ['id'],
+      },
+    },
+  },
+  execute: async (args) => {
+    deleteLead(args.id);
+    return `Lead #${args.id} eliminado del CRM.`;
+  },
+});
+
+console.log('🎯 Leads CRM tools registered (search_leads_online, scrape_leads_from_url, get_leads, update_lead, delete_lead)');

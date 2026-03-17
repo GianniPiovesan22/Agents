@@ -18,6 +18,7 @@ import '../tools/browser.js';
 import '../tools/user_profile.js';
 import '../tools/forex_factory.js';
 import '../tools/stocks.js';
+import '../tools/leads.js';
 
 const MAX_ITERATIONS = 3;
 
@@ -87,6 +88,13 @@ You have access to the following tools to help the user:
 
 **Social Content:**
 - get_social_content_guide: Get the Social Content strategy guide, templates, and hook formulas for social media
+
+**CRM & Leads:**
+- search_leads_online: Buscar empresas/leads online por industria y zona, guardarlos en el CRM
+- scrape_leads_from_url: Extraer contactos de una URL específica y guardarlos en el CRM
+- get_leads: Ver leads del CRM, filtrar por estado o buscar por nombre/industria
+- update_lead: Actualizar el estado de un lead (nuevo, contactado, interesado, propuesta_enviada, cerrado, descartado)
+- delete_lead: Eliminar un lead del CRM
 
 **User Memory:**
 - remember_about_user: Save facts or preferences about the user for future conversations

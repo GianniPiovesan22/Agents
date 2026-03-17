@@ -53,6 +53,21 @@ localDb.exec(`
     notified INTEGER DEFAULT 0,
     fetched_at TEXT NOT NULL
   );
+  CREATE TABLE IF NOT EXISTS leads (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    company_name TEXT NOT NULL,
+    contact_name TEXT,
+    email TEXT,
+    phone TEXT,
+    website TEXT,
+    industry TEXT,
+    location TEXT,
+    source TEXT,
+    status TEXT DEFAULT 'nuevo',
+    notes TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
 `);
 
 /**
@@ -339,6 +354,99 @@ export function markForexEventNotified(id: string): void {
     stmt.run(id);
   } catch (err) {
     console.error("markForexEventNotified error:", err);
+  }
+}
+
+export interface Lead {
+  id: number;
+  company_name: string;
+  contact_name?: string;
+  email?: string;
+  phone?: string;
+  website?: string;
+  industry?: string;
+  location?: string;
+  source?: string;
+  status: string;
+  notes?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export function saveLead(lead: Omit<Lead, 'id' | 'created_at' | 'updated_at'>): number {
+  try {
+    const now = new Date().toISOString();
+    const stmt = localDb.prepare(`
+      INSERT INTO leads (company_name, contact_name, email, phone, website, industry, location, source, status, notes, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    const result = stmt.run(
+      lead.company_name,
+      lead.contact_name ?? null,
+      lead.email ?? null,
+      lead.phone ?? null,
+      lead.website ?? null,
+      lead.industry ?? null,
+      lead.location ?? null,
+      lead.source ?? null,
+      lead.status ?? 'nuevo',
+      lead.notes ?? null,
+      now,
+      now
+    );
+    return result.lastInsertRowid as number;
+  } catch (e) {
+    console.error("saveLead error:", e);
+    return -1;
+  }
+}
+
+export function updateLeadStatus(id: number, status: string, notes?: string): void {
+  try {
+    const now = new Date().toISOString();
+    if (notes !== undefined) {
+      const stmt = localDb.prepare('UPDATE leads SET status = ?, notes = ?, updated_at = ? WHERE id = ?');
+      stmt.run(status, notes, now, id);
+    } else {
+      const stmt = localDb.prepare('UPDATE leads SET status = ?, updated_at = ? WHERE id = ?');
+      stmt.run(status, now, id);
+    }
+  } catch (e) {
+    console.error("updateLeadStatus error:", e);
+  }
+}
+
+export function getLeads(status?: string): Lead[] {
+  try {
+    if (status) {
+      const stmt = localDb.prepare('SELECT * FROM leads WHERE status = ? ORDER BY created_at DESC');
+      return stmt.all(status) as Lead[];
+    }
+    const stmt = localDb.prepare('SELECT * FROM leads ORDER BY created_at DESC');
+    return stmt.all() as Lead[];
+  } catch (e) {
+    console.error("getLeads error:", e);
+    return [];
+  }
+}
+
+export function searchLeads(query: string): Lead[] {
+  try {
+    const q = `%${query}%`;
+    const stmt = localDb.prepare('SELECT * FROM leads WHERE company_name LIKE ? OR industry LIKE ? OR location LIKE ? ORDER BY created_at DESC');
+    return stmt.all(q, q, q) as Lead[];
+  } catch (e) {
+    console.error("searchLeads error:", e);
+    return [];
+  }
+}
+
+export function deleteLead(id: number): void {
+  try {
+    const stmt = localDb.prepare('DELETE FROM leads WHERE id = ?');
+    stmt.run(id);
+  } catch (e) {
+    console.error("deleteLead error:", e);
   }
 }
 
