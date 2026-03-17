@@ -95,17 +95,17 @@ async function main() {
         });
         console.log("⏰ Cron job for reminders initialized");
 
-        // Daily Digest Setup (runs at 08:30 AM daily server time)
+        // Daily Digest Setup (runs at 08:30 AM Buenos Aires time)
         cron.schedule('30 8 * * *', async () => {
             await sendDailyDigest();
-        });
-        console.log("🌅 Cron job for Daily Digest initialized (08:30 AM)");
+        }, { timezone: 'America/Argentina/Buenos_Aires' });
+        console.log("🌅 Cron job for Daily Digest initialized (08:30 AM ART)");
 
-        // Weekly Digest Setup (runs every Friday at 9:00 PM)
+        // Weekly Digest Setup (runs every Friday at 9:00 PM Buenos Aires time)
         cron.schedule('0 21 * * 5', async () => {
             await sendWeeklyDigest();
-        });
-        console.log("📅 Cron job for Weekly Digest initialized (Friday 09:00 PM)");
+        }, { timezone: 'America/Argentina/Buenos_Aires' });
+        console.log("📅 Cron job for Weekly Digest initialized (Friday 09:00 PM ART)");
 
         // Proactive Alerts (runs every 5 minutes)
         cron.schedule('*/5 * * * *', async () => {
@@ -138,7 +138,7 @@ async function main() {
         });
         console.log("📈 Cron job for Forex high-impact alerts initialized (every 15 minutes)");
 
-        // Forex Factory — daily calendar cache refresh (runs at 7:00 AM, before daily digest)
+        // Forex Factory — daily calendar cache refresh (runs at 7:00 AM Buenos Aires time)
         cron.schedule('0 7 * * *', async () => {
             try {
                 const jinaRes = await axios.get('https://r.jina.ai/https://www.forexfactory.com/calendar', {
@@ -183,8 +183,8 @@ async function main() {
             } catch (e: any) {
                 console.error("Forex calendar daily refresh error:", e.message);
             }
-        });
-        console.log("📈 Cron job for Forex calendar daily refresh initialized (07:00 AM)");
+        }, { timezone: 'America/Argentina/Buenos_Aires' });
+        console.log("📈 Cron job for Forex calendar daily refresh initialized (07:00 AM ART)");
 
     } catch (error) {
         console.error("Critical failure during startup:", error);
