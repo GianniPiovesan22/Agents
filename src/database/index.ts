@@ -322,18 +322,51 @@ export async function getAllEmbeddings(userId: string): Promise<{ content: strin
   }
 }
 
-export function setUserProfile(userId: string, key: string, value: string): void {
+export async function setUserProfile(userId: string, key: string, value: string): Promise<void> {
+  // 1. Save to SQLite
   try {
     const stmt = localDb.prepare(
       'INSERT INTO user_profile (user_id, key, value, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(user_id, key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at'
     );
     stmt.run(userId, key, value, Date.now());
   } catch (e) {
-    console.error("User Profile Save Error:", e);
+    console.error("User Profile Save Error (SQLite):", e);
+  }
+
+  // 2. Save to Firestore
+  if (firestore) {
+    try {
+      await firestore.collection('user_profile').doc(userId).set(
+        { [key]: value, updated_at: admin.firestore.FieldValue.serverTimestamp() },
+        { merge: true }
+      );
+    } catch (e: any) {
+      console.error("User Profile Save Error (Firestore):", e.message);
+    }
   }
 }
 
-export function getUserProfile(userId: string): Record<string, string> {
+export async function getUserProfile(userId: string): Promise<Record<string, string>> {
+  // 1. Try Firestore first
+  if (firestore) {
+    try {
+      const doc = await firestore.collection('user_profile').doc(userId).get();
+      if (doc.exists) {
+        const data = doc.data() ?? {};
+        const profile: Record<string, string> = {};
+        for (const [k, v] of Object.entries(data)) {
+          if (k !== 'updated_at') {
+            profile[k] = String(v);
+          }
+        }
+        return profile;
+      }
+    } catch (e: any) {
+      console.error("User Profile Read Error (Firestore):", e.message);
+    }
+  }
+
+  // 2. Fallback to SQLite
   try {
     const stmt = localDb.prepare('SELECT key, value FROM user_profile WHERE user_id = ?');
     const rows = stmt.all(userId) as { key: string; value: string }[];
@@ -343,7 +376,7 @@ export function getUserProfile(userId: string): Record<string, string> {
     }
     return profile;
   } catch (e) {
-    console.error("User Profile Read Error:", e);
+    console.error("User Profile Read Error (SQLite):", e);
     return {};
   }
 }

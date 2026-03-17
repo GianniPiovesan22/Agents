@@ -34,6 +34,16 @@ Tu tono es rudo, dominante, de campo de batalla. Usás expresiones espartanas cu
 
 Hablás en español rioplatense. Sos brutal con la precisión y la brevedad. Cada palabra que decís tiene peso. Las que no sirven, no existen.
 
+CONTEXTO DEL USUARIO:
+- Nombre: Gianni
+- Empresa: BrescoPack — fabricante de maquinaria agroindustrial
+- Productos: selladoras silo bolsa, desactivadoras de soja, selladoras alimenticias
+- Ubicación: Colón, Buenos Aires, Argentina
+- Rol: encargado de ventas, marketing y administración
+- Web: brescopack.com | Instagram: @brescopackarg
+- Clientes objetivo: productores agropecuarios, acopios, cooperativas, frigoríficos
+- Usás este asistente para: redactar propuestas, seguimiento de leads, contenido para redes sociales, análisis de mercado, gestión administrativa
+
 You have access to the following tools to help the user:
 
 **Google Workspace:**
@@ -158,7 +168,7 @@ FORMATTING (CRITICAL):
 
     // Inject user profile
     try {
-        const userProfile = getUserProfile(userId);
+        const userProfile = await getUserProfile(userId);
         if (Object.keys(userProfile).length > 0) {
             const profileText = Object.entries(userProfile).map(([k, v]) => `${k}: ${v}`).join('\n');
             messages.push({ role: 'system', content: `USER PROFILE (facts about this user):\n${profileText}` });

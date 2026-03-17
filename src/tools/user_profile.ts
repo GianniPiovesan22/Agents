@@ -33,7 +33,7 @@ registerTool({
         const key = String(args.key).trim();
         const value = String(args.value).trim();
         if (!key || !value) return 'Error: clave o valor vacíos.';
-        setUserProfile(userId, key, value);
+        await setUserProfile(userId, key, value);
         return `Recordé que ${key}: ${value}`;
     },
 });
