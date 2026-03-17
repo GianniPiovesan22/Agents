@@ -33,29 +33,27 @@ registerTool({
         if (!ai) return 'Error: Gemini API not configured. Set GEMINI_API_KEY.';
 
         try {
-            const response = await ai.models.generateImages({
-                model: 'imagen-4.0-generate-001',
-                prompt: args.prompt,
+            const response = await ai.models.generateContent({
+                model: 'gemini-2.0-flash-preview-image-generation',
+                contents: [{ role: 'user', parts: [{ text: args.prompt }] }],
                 config: {
-                    numberOfImages: 1,
+                    responseModalities: ['TEXT', 'IMAGE'],
                 },
             });
 
-            if (!response.generatedImages || response.generatedImages.length === 0) {
+            const parts = response.candidates?.[0]?.content?.parts ?? [];
+            const imagePart = parts.find((p: any) => p.inlineData?.mimeType?.startsWith('image/'));
+
+            if (!imagePart?.inlineData?.data) {
                 return 'No se pudo generar la imagen. Intentá con otra descripción.';
             }
 
-            const imageData = response.generatedImages[0].image;
-            if (!imageData || !imageData.imageBytes) {
-                return 'Error: la imagen generada no contiene datos.';
-            }
-
-            // Save to temp file
-            const tempPath = path.join(os.tmpdir(), `img_${Date.now()}.png`);
-            const buffer = Buffer.from(imageData.imageBytes, 'base64');
+            const mimeType = imagePart.inlineData.mimeType;
+            const ext = mimeType.includes('png') ? 'png' : 'jpg';
+            const tempPath = path.join(os.tmpdir(), `img_${Date.now()}.${ext}`);
+            const buffer = Buffer.from(imagePart.inlineData.data, 'base64');
             fs.writeFileSync(tempPath, buffer);
 
-            // Return special format that the bot handler will detect
             return `[IMG:${tempPath}]`;
         } catch (error: any) {
             console.error('Image generation error:', error);
@@ -64,4 +62,4 @@ registerTool({
     },
 });
 
-console.log('🖼️ Image Generation tool registered (Gemini Imagen 3)');
+console.log('🖼️ Image Generation tool registered (Nano Banana 2)');
