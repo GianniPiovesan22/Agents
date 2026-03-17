@@ -3,6 +3,7 @@ import { config } from '../config/index.js';
 import fs from 'fs';
 import path from 'path';
 import Database from 'better-sqlite3';
+import { syncLeadToSheets } from '../tools/leads_sheets.js';
 
 let firestore: FirebaseFirestore.Firestore | null = null;
 let localDb: any = null;
@@ -486,7 +487,39 @@ export function saveLead(lead: Omit<Lead, 'id' | 'created_at' | 'updated_at'>): 
       now,
       now
     );
-    return result.lastInsertRowid as number;
+    const sqliteId = result.lastInsertRowid as number;
+
+    // Build full lead object for background sync
+    const fullLead: Lead = {
+      id: sqliteId,
+      company_name: lead.company_name,
+      contact_name: lead.contact_name,
+      email: lead.email,
+      phone: lead.phone,
+      website: lead.website,
+      industry: lead.industry,
+      location: lead.location,
+      source: lead.source,
+      status: lead.status ?? 'nuevo',
+      notes: lead.notes,
+      created_at: now,
+      updated_at: now,
+    };
+
+    // Persist to Firestore in background — never blocks
+    if (firestore) {
+      firestore.collection('leads').add({
+        ...fullLead,
+        sqlite_id: sqliteId,
+        created_at: admin.firestore.FieldValue.serverTimestamp(),
+        updated_at: admin.firestore.FieldValue.serverTimestamp(),
+      }).catch((err: any) => console.error('[saveLead] Firestore error:', err.message));
+    }
+
+    // Sync to Google Sheets in background — never blocks
+    syncLeadToSheets(fullLead).catch((err: any) => console.error('[saveLead] Sheets error:', err.message));
+
+    return sqliteId;
   } catch (e) {
     console.error("saveLead error:", e);
     return -1;
@@ -502,6 +535,26 @@ export function updateLeadStatus(id: number, status: string, notes?: string): vo
     } else {
       const stmt = localDb.prepare('UPDATE leads SET status = ?, updated_at = ? WHERE id = ?');
       stmt.run(status, now, id);
+    }
+
+    // Update Firestore in background by sqlite_id
+    if (firestore) {
+      const updateData: Record<string, any> = {
+        status,
+        updated_at: admin.firestore.FieldValue.serverTimestamp(),
+      };
+      if (notes !== undefined) updateData.notes = notes;
+
+      firestore.collection('leads')
+        .where('sqlite_id', '==', id)
+        .limit(1)
+        .get()
+        .then(snapshot => {
+          if (!snapshot.empty) {
+            return snapshot.docs[0].ref.update(updateData);
+          }
+        })
+        .catch((err: any) => console.error('[updateLeadStatus] Firestore error:', err.message));
     }
   } catch (e) {
     console.error("updateLeadStatus error:", e);
@@ -537,6 +590,20 @@ export function deleteLead(id: number): void {
   try {
     const stmt = localDb.prepare('DELETE FROM leads WHERE id = ?');
     stmt.run(id);
+
+    // Delete from Firestore in background by sqlite_id
+    if (firestore) {
+      firestore.collection('leads')
+        .where('sqlite_id', '==', id)
+        .limit(1)
+        .get()
+        .then(snapshot => {
+          if (!snapshot.empty) {
+            return snapshot.docs[0].ref.delete();
+          }
+        })
+        .catch((err: any) => console.error('[deleteLead] Firestore error:', err.message));
+    }
   } catch (e) {
     console.error("deleteLead error:", e);
   }
