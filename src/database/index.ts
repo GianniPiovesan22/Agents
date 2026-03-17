@@ -23,7 +23,9 @@ localDb.exec(`
     user_id TEXT NOT NULL,
     message TEXT NOT NULL,
     remind_at DATETIME NOT NULL,
-    sent BOOLEAN DEFAULT 0
+    sent BOOLEAN DEFAULT 0,
+    recurrence TEXT,
+    recurrence_time TEXT
   );
   CREATE TABLE IF NOT EXISTS memory_embeddings (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -69,6 +71,14 @@ localDb.exec(`
     updated_at TEXT NOT NULL
   );
 `);
+
+// Migrate existing reminders table — add recurrence columns if missing
+try {
+  localDb.exec(`ALTER TABLE reminders ADD COLUMN recurrence TEXT`);
+} catch (_) { /* column already exists */ }
+try {
+  localDb.exec(`ALTER TABLE reminders ADD COLUMN recurrence_time TEXT`);
+} catch (_) { /* column already exists */ }
 
 /**
  * Initialize Firebase with Absolute Path
@@ -158,10 +168,18 @@ export async function getHistory(userId: string, limit: number = 10) {
   }));
 }
 
-export async function createReminder(userId: string, message: string, remindAt: Date) {
+export async function createReminder(
+  userId: string,
+  message: string,
+  remindAt: Date,
+  recurrence?: string,
+  recurrenceTime?: string
+) {
   try {
-    const stmt = localDb.prepare('INSERT INTO reminders (user_id, message, remind_at, sent) VALUES (?, ?, ?, 0)');
-    stmt.run(userId, message, remindAt.toISOString());
+    const stmt = localDb.prepare(
+      'INSERT INTO reminders (user_id, message, remind_at, sent, recurrence, recurrence_time) VALUES (?, ?, ?, 0, ?, ?)'
+    );
+    stmt.run(userId, message, remindAt.toISOString(), recurrence ?? null, recurrenceTime ?? null);
   } catch (e) {
     console.error("Local DB Reminder Save Error:", e);
   }
@@ -172,7 +190,9 @@ export async function createReminder(userId: string, message: string, remindAt: 
         userId,
         message,
         remindAt: admin.firestore.Timestamp.fromDate(remindAt),
-        sent: false
+        sent: false,
+        recurrence: recurrence ?? null,
+        recurrenceTime: recurrenceTime ?? null,
       });
     } catch (e: any) {
       console.error("Firebase Reminder Save Error:", e.message);
@@ -224,6 +244,44 @@ export async function markReminderSent(id: string | number, source: 'firebase' |
   } else {
     const stmt = localDb.prepare('UPDATE reminders SET sent = 1 WHERE id = ?');
     stmt.run(id);
+  }
+}
+
+export interface RecurringReminder {
+  id: number;
+  userId: string;
+  message: string;
+  remindAt: Date;
+  recurrence: string;
+  recurrenceTime: string;
+}
+
+export function getRecurringReminders(): RecurringReminder[] {
+  try {
+    const stmt = localDb.prepare(
+      'SELECT id, user_id, message, remind_at, recurrence, recurrence_time FROM reminders WHERE recurrence IS NOT NULL AND sent = 0'
+    );
+    const rows = stmt.all() as any[];
+    return rows.map(r => ({
+      id: r.id,
+      userId: r.user_id,
+      message: r.message,
+      remindAt: new Date(r.remind_at),
+      recurrence: r.recurrence,
+      recurrenceTime: r.recurrence_time,
+    }));
+  } catch (e) {
+    console.error("getRecurringReminders error:", e);
+    return [];
+  }
+}
+
+export function updateReminderNextFire(id: number, nextFireAt: Date): void {
+  try {
+    const stmt = localDb.prepare('UPDATE reminders SET remind_at = ?, sent = 0 WHERE id = ?');
+    stmt.run(nextFireAt.toISOString(), id);
+  } catch (e) {
+    console.error("updateReminderNextFire error:", e);
   }
 }
 

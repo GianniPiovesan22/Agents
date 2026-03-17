@@ -2,12 +2,56 @@ import { startBot } from './bot/index.js';
 import { createWhatsAppServer } from './whatsapp/index.js';
 import { config } from './config/index.js';
 import cron from 'node-cron';
-import { getPendingReminders, markReminderSent, getUpcomingHighImpactEvents, markForexEventNotified, saveForexEvents, ForexEvent } from './database/index.js';
+import { getPendingReminders, markReminderSent, getRecurringReminders, updateReminderNextFire, getUpcomingHighImpactEvents, markForexEventNotified, saveForexEvents, ForexEvent } from './database/index.js';
 import { bot } from './bot/index.js';
 import { sendDailyDigest } from './agent/daily_digest.js';
 import { sendWeeklyDigest } from './agent/weekly_digest.js';
 import { checkProactiveAlerts } from './agent/proactive_alerts.js';
 import axios from 'axios';
+
+/**
+ * Compute the next fire datetime for a recurring reminder.
+ * recurrencePattern: "daily" | "weekly:N" | "monthly:N"
+ * recurrenceTime: "HH:MM"
+ */
+function computeNextFire(recurrencePattern: string, recurrenceTime: string): Date {
+    const [hh, mm] = recurrenceTime.split(':').map(Number);
+    const now = new Date();
+    const next = new Date(now);
+    next.setSeconds(0, 0);
+    next.setHours(hh, mm, 0, 0);
+
+    if (recurrencePattern === 'daily') {
+        next.setDate(next.getDate() + 1);
+        return next;
+    }
+
+    if (recurrencePattern.startsWith('weekly:')) {
+        const targetDay = parseInt(recurrencePattern.split(':')[1], 10);
+        next.setDate(next.getDate() + 7); // same weekday, next week
+        next.setHours(hh, mm, 0, 0);
+        // Align to correct weekday from now+1day forward
+        const base = new Date(now);
+        base.setDate(base.getDate() + 1);
+        base.setHours(hh, mm, 0, 0);
+        let daysAhead = (targetDay - base.getDay() + 7) % 7;
+        if (daysAhead === 0) daysAhead = 7;
+        base.setDate(base.getDate() + daysAhead);
+        return base;
+    }
+
+    if (recurrencePattern.startsWith('monthly:')) {
+        const dom = parseInt(recurrencePattern.split(':')[1], 10);
+        next.setMonth(next.getMonth() + 1);
+        next.setDate(dom);
+        next.setHours(hh, mm, 0, 0);
+        return next;
+    }
+
+    // Fallback: daily
+    next.setDate(next.getDate() + 1);
+    return next;
+}
 
 async function main() {
     try {
@@ -25,10 +69,22 @@ async function main() {
         cron.schedule('* * * * *', async () => {
             try {
                 const pending = await getPendingReminders();
+                // Fetch recurring reminder IDs that are due (they also appear in pending)
+                const recurringDue = getRecurringReminders().filter(r => r.remindAt <= new Date());
+                const recurringDueIds = new Set(recurringDue.map(r => r.id));
+
                 for (const reminder of pending) {
                     try {
                         await bot.api.sendMessage(reminder.userId, `⏰ *Recordatorio:*\n${reminder.message}`, { parse_mode: 'Markdown' });
-                        await markReminderSent(reminder.id, reminder.source);
+
+                        if (typeof reminder.id === 'number' && recurringDueIds.has(reminder.id)) {
+                            // Recurring: compute next fire instead of marking sent
+                            const rec = recurringDue.find(r => r.id === reminder.id)!;
+                            const nextFireAt = computeNextFire(rec.recurrence, rec.recurrenceTime);
+                            updateReminderNextFire(rec.id, nextFireAt);
+                        } else {
+                            await markReminderSent(reminder.id, reminder.source);
+                        }
                     } catch (err: any) {
                         console.error(`Error sending reminder to ${reminder.userId}:`, err.message);
                     }
