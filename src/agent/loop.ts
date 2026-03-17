@@ -19,6 +19,7 @@ import '../tools/user_profile.js';
 import '../tools/forex_factory.js';
 import '../tools/stocks.js';
 import '../tools/leads.js';
+import '../tools/instagram_content.js';
 
 const MAX_ITERATIONS = 3;
 
@@ -105,6 +106,11 @@ You have access to the following tools to help the user:
 - get_leads: Ver leads del CRM, filtrar por estado o buscar por nombre/industria
 - update_lead: Actualizar el estado de un lead (nuevo, contactado, interesado, propuesta_enviada, cerrado, descartado)
 - delete_lead: Eliminar un lead del CRM
+- get_stale_leads: Ver leads sin actividad en N días que necesitan seguimiento (default: 7 días)
+
+**Contenido para redes:**
+- generate_instagram_post: Generar caption e imagen para Instagram de BrescoPack
+- generate_content_calendar: Generar calendario de contenido semanal para redes
 
 **User Memory:**
 - remember_about_user: Save facts or preferences about the user for future conversations

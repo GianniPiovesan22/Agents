@@ -2,7 +2,7 @@ import { startBot } from './bot/index.js';
 import { createWhatsAppServer } from './whatsapp/index.js';
 import { config } from './config/index.js';
 import cron from 'node-cron';
-import { getPendingReminders, markReminderSent, getRecurringReminders, updateReminderNextFire, getUpcomingHighImpactEvents, markForexEventNotified, saveForexEvents, ForexEvent } from './database/index.js';
+import { getPendingReminders, markReminderSent, getRecurringReminders, updateReminderNextFire, getUpcomingHighImpactEvents, markForexEventNotified, saveForexEvents, ForexEvent, getStaleLeads } from './database/index.js';
 import { bot } from './bot/index.js';
 import { sendDailyDigest } from './agent/daily_digest.js';
 import { sendWeeklyDigest } from './agent/weekly_digest.js';
@@ -185,6 +185,32 @@ async function main() {
             }
         }, { timezone: 'America/Argentina/Buenos_Aires' });
         console.log("📈 Cron job for Forex calendar daily refresh initialized (07:00 AM ART)");
+
+        // Stale Leads Follow-up (runs every day at 9:00 AM Buenos Aires time)
+        cron.schedule('0 9 * * *', async () => {
+            try {
+                const staleLeads = getStaleLeads(7);
+                if (staleLeads.length === 0) return;
+
+                const toAlert = staleLeads.slice(0, 5);
+
+                for (const lead of toAlert) {
+                    const updatedAt = new Date(lead.updated_at);
+                    const daysAgo = Math.floor((Date.now() - updatedAt.getTime()) / (1000 * 60 * 60 * 24));
+                    const message = `⚠️ Seguimiento pendiente: ${lead.company_name} lleva ${daysAgo} días sin actividad. Estado: ${lead.status}. ¿Querés que redacte un follow-up?`;
+                    for (const userId of config.TELEGRAM_ALLOWED_USER_IDS) {
+                        try {
+                            await bot.api.sendMessage(userId, message);
+                        } catch (sendErr: any) {
+                            console.error(`Error sending stale lead alert to ${userId}:`, sendErr.message);
+                        }
+                    }
+                }
+            } catch (e: any) {
+                console.error("Stale leads cron error:", e.message);
+            }
+        }, { timezone: 'America/Argentina/Buenos_Aires' });
+        console.log("🎯 Cron job for stale leads follow-up initialized (09:00 AM ART)");
 
     } catch (error) {
         console.error("Critical failure during startup:", error);

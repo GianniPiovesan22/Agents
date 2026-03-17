@@ -1,6 +1,6 @@
 import { registerTool } from './index.js';
 import { config } from '../config/index.js';
-import { saveLead, getLeads, searchLeads, updateLeadStatus, deleteLead } from '../database/index.js';
+import { saveLead, getLeads, searchLeads, updateLeadStatus, deleteLead, getStaleLeads } from '../database/index.js';
 import axios from 'axios';
 
 // ═══════════════════════════════════════════════════════════════
@@ -376,4 +376,51 @@ registerTool({
   },
 });
 
-console.log('🎯 Leads CRM tools registered (search_leads_online, scrape_leads_from_url, get_leads, update_lead, delete_lead)');
+// ── get_stale_leads ─────────────────────────────────────────────
+registerTool({
+  definition: {
+    type: 'function',
+    function: {
+      name: 'get_stale_leads',
+      description: 'Ver leads del CRM que no tuvieron actividad en N días y necesitan seguimiento. Útil para saber a quién hay que contactar.',
+      parameters: {
+        type: 'object',
+        properties: {
+          days_without_activity: {
+            type: 'number',
+            description: 'Días sin actividad para considerar un lead estancado (default: 7)',
+          },
+        },
+        required: [],
+      },
+    },
+  },
+  execute: async (args) => {
+    const days: number = args.days_without_activity ?? 7;
+    const leads = getStaleLeads(days);
+
+    if (leads.length === 0) {
+      return `No hay leads sin actividad hace más de ${days} días. Estás al día.`;
+    }
+
+    const lines: string[] = [`Leads sin actividad hace más de ${days} días (${leads.length}):\n`];
+
+    for (const lead of leads) {
+      const emoji = STATUS_EMOJIS[lead.status] ?? '🔵';
+      const updatedAt = new Date(lead.updated_at);
+      const daysAgo = Math.floor((Date.now() - updatedAt.getTime()) / (1000 * 60 * 60 * 24));
+      const parts: string[] = [`${emoji} [${lead.id}] ${lead.company_name} — ${daysAgo} días sin actividad`];
+      if (lead.industry) parts.push(`Rubro: ${lead.industry}`);
+      if (lead.location) parts.push(`Zona: ${lead.location}`);
+      if (lead.contact_name) parts.push(`Contacto: ${lead.contact_name}`);
+      if (lead.email) parts.push(`Email: ${lead.email}`);
+      if (lead.phone) parts.push(`Tel: ${lead.phone}`);
+      parts.push(`Estado: ${lead.status}`);
+      lines.push(parts.join(' | '));
+    }
+
+    return lines.join('\n');
+  },
+});
+
+console.log('🎯 Leads CRM tools registered (search_leads_online, scrape_leads_from_url, get_leads, update_lead, delete_lead, get_stale_leads)');

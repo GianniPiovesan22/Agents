@@ -586,6 +586,23 @@ export function searchLeads(query: string): Lead[] {
   }
 }
 
+export function getStaleLeads(daysSinceUpdate: number): Lead[] {
+  try {
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - daysSinceUpdate);
+    const stmt = localDb.prepare(`
+      SELECT * FROM leads
+      WHERE status NOT IN ('cerrado', 'descartado')
+        AND updated_at <= ?
+      ORDER BY updated_at ASC
+    `);
+    return stmt.all(cutoff.toISOString()) as Lead[];
+  } catch (e) {
+    console.error("getStaleLeads error:", e);
+    return [];
+  }
+}
+
 export function deleteLead(id: number): void {
   try {
     const stmt = localDb.prepare('DELETE FROM leads WHERE id = ?');
