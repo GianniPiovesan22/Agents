@@ -20,8 +20,41 @@ const anthropicClient = config.ANTHROPIC_API_KEY
     ? new Anthropic({ apiKey: config.ANTHROPIC_API_KEY })
     : null;
 
-// ── Anthropic Model ────────────────────────────────────────────
-const ANTHROPIC_MODEL = 'claude-sonnet-4-5';
+// ── Anthropic Models ───────────────────────────────────────────
+const ANTHROPIC_SONNET = 'claude-sonnet-4-5';
+const ANTHROPIC_HAIKU  = 'claude-haiku-4-5-20251001';
+
+// Keywords that always require Sonnet
+const SONNET_KEYWORDS = [
+    'redactá', 'redacta', 'escribí', 'escribi', 'propuesta', 'presupuesto',
+    'analizá', 'analiza', 'análisis', 'analisis', 'investigá', 'investiga',
+    'buscá', 'busca', 'leads', 'email', 'correo', 'gmail', 'calendar',
+    'drive', 'sheets', 'documento', 'imagen', 'generá', 'genera',
+    'instagram', 'contenido', 'digest', 'resumen', 'informe', 'reporte',
+    'estrategia', 'plan', 'comparar', 'explica', 'explicá', 'detallá',
+];
+
+function selectAnthropicModel(messages: Message[], tools?: Tool[]): string {
+    // Always Sonnet if tools are available (agent loop with capabilities)
+    if (tools && tools.length > 0) return ANTHROPIC_SONNET;
+
+    const lastUser = [...messages].reverse().find(m => m.role === 'user');
+    if (!lastUser) return ANTHROPIC_SONNET;
+
+    // Always Sonnet for images or documents
+    if (lastUser.images?.length || lastUser.documents?.length) return ANTHROPIC_SONNET;
+
+    const text = typeof lastUser.content === 'string' ? lastUser.content.toLowerCase() : '';
+
+    // Always Sonnet for long messages
+    if (text.length > 150) return ANTHROPIC_SONNET;
+
+    // Always Sonnet if complex keywords detected
+    if (SONNET_KEYWORDS.some(kw => text.includes(kw))) return ANTHROPIC_SONNET;
+
+    // Everything else → Haiku (greetings, quick questions, simple lookups)
+    return ANTHROPIC_HAIKU;
+}
 
 // ── Gemini Model Tiers (fallback) ──────────────────────────────
 const GEMINI_MODELS = {
@@ -176,7 +209,8 @@ function convertMessagesForAnthropic(messages: Message[]) {
 async function anthropicCompletion(messages: Message[], tools?: Tool[]): Promise<CompletionResult> {
     if (!anthropicClient) throw new Error('Anthropic not configured');
 
-    console.log(`🧠 Provider: Anthropic (${ANTHROPIC_MODEL})`);
+    const model = selectAnthropicModel(messages, tools);
+    console.log(`🧠 Provider: Anthropic (${model})`);
 
     const { system, messages: anthropicMessages } = convertMessagesForAnthropic(messages);
 
@@ -187,7 +221,7 @@ async function anthropicCompletion(messages: Message[], tools?: Tool[]): Promise
     }));
 
     const response = await anthropicClient.messages.create({
-        model: ANTHROPIC_MODEL,
+        model,
         max_tokens: 8096,
         ...(system ? { system } : {}),
         messages: anthropicMessages,
