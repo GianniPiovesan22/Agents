@@ -298,8 +298,7 @@ ${remindersInfo || "Sin recordatorios."}
 `;
 
         // 9. Generar audio script + texto estructurado en paralelo
-        const today = new Date();
-        const fechaHoy = today.toLocaleDateString('es-AR', { weekday: 'long', day: 'numeric', month: 'long' });
+        const fechaHoy = new Date().toLocaleDateString('es-AR', { weekday: 'long', day: 'numeric', month: 'long' });
 
         const audioPrompt = `Sos el asistente personal de Gianni, de BrescoPack (maquinaria agroindustrial, Colón, Buenos Aires).
 Hoy es ${fechaHoy}. Elaborá un script para audio de máximo 1 minuto. Tono espartano, directo, motivador. Sin símbolos ni emojis — solo texto hablado fluido. Español rioplatense.
