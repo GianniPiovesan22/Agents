@@ -1,14 +1,11 @@
 import { registerTool } from './index.js';
-import { config } from '../config/index.js';
-import { GoogleGenAI } from '@google/genai';
+import axios from 'axios';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
 
-const ai = config.GEMINI_API_KEY ? new GoogleGenAI({ apiKey: config.GEMINI_API_KEY }) : null;
-
 // ═══════════════════════════════════════════════════════════════
-// IMAGE GENERATION — Gemini Imagen 3
+// IMAGE GENERATION — Pollinations.ai (free, no API key)
 // ═══════════════════════════════════════════════════════════════
 
 registerTool({
@@ -30,48 +27,25 @@ registerTool({
         },
     },
     execute: async (args) => {
-        if (!ai) return 'Error: Gemini API not configured. Set GEMINI_API_KEY.';
+        try {
+            const encoded = encodeURIComponent(args.prompt);
+            const url = `https://image.pollinations.ai/prompt/${encoded}?width=1024&height=1024&nologo=true&enhance=true`;
 
-        const models = [
-            'gemini-2.0-flash-exp',
-            'gemini-2.0-flash-preview-image-generation',
-            'gemini-2.5-flash-preview-image-generation',
-        ];
+            console.log(`🖼️ Generating image via Pollinations.ai...`);
+            const response = await axios.get(url, {
+                responseType: 'arraybuffer',
+                timeout: 60000,
+            });
 
-        for (const model of models) {
-            try {
-                console.log(`🖼️ Trying image generation with model: ${model}`);
-                const response = await ai.models.generateContent({
-                    model,
-                    contents: [{ role: 'user', parts: [{ text: args.prompt }] }],
-                    config: {
-                        responseModalities: ['TEXT', 'IMAGE'],
-                    },
-                });
-
-                const parts = response.candidates?.[0]?.content?.parts ?? [];
-                console.log(`🖼️ Response parts: ${JSON.stringify(parts.map((p: any) => Object.keys(p)))}`);
-                const imagePart = parts.find((p: any) => p.inlineData?.mimeType?.startsWith('image/'));
-
-                if (!imagePart?.inlineData?.data) {
-                    console.log(`🖼️ No image part found for model ${model}, trying next...`);
-                    continue;
-                }
-
-                const mimeType = imagePart.inlineData.mimeType ?? 'image/png';
-                const ext = mimeType.includes('png') ? 'png' : 'jpg';
-                const tempPath = path.join(os.tmpdir(), `img_${Date.now()}.${ext}`);
-                const buffer = Buffer.from(imagePart.inlineData.data, 'base64');
-                fs.writeFileSync(tempPath, buffer);
-                console.log(`🖼️ Image saved to ${tempPath}`);
-                return `[IMG:${tempPath}]`;
-            } catch (error: any) {
-                console.error(`🖼️ Model ${model} failed: ${error.message}`);
-            }
+            const tempPath = path.join(os.tmpdir(), `img_${Date.now()}.jpg`);
+            fs.writeFileSync(tempPath, Buffer.from(response.data));
+            console.log(`🖼️ Image saved to ${tempPath}`);
+            return `[IMG:${tempPath}]`;
+        } catch (error: any) {
+            console.error(`🖼️ Image generation failed: ${error.message}`);
+            return `Error generando imagen: ${error.message}`;
         }
-
-        return 'Error generando imagen: ningún modelo disponible pudo generar la imagen. Verificá que tu Gemini API key tenga acceso a generación de imágenes.';
     },
 });
 
-console.log('🖼️ Image Generation tool registered (Nano Banana 2)');
+console.log('🖼️ Image Generation tool registered (Pollinations.ai)');
