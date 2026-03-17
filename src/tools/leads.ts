@@ -60,36 +60,48 @@ registerTool({
     const location: string = args.location ?? 'Argentina';
     const maxResults: number = Math.min(args.max_results ?? 8, 15);
 
-    // Step 1: Use Tavily to find company website URLs (not snippets)
+    // Step 1: Use Tavily to find company website URLs — try multiple query variations
     const candidateUrls: Array<{ title: string; url: string }> = [];
+    const seen = new Set<string>();
+
+    const EXCLUDE_DOMAINS = ['facebook.com', 'instagram.com', 'twitter.com', 'youtube.com', 'wikipedia.org', 'mercadolibre.com', 'linkedin.com', 'infobae.com', 'clarin.com', 'lanacion.com.ar'];
+
+    const queries = [
+      `${industry} ${location} empresa contacto`,
+      `${industry} ${location} sitio web`,
+      `"${industry}" Argentina directorio empresas`,
+      `${industry} Argentina contact website`,
+    ];
 
     if (config.TAVILY_API_KEY) {
-      const query = `empresas ${industry} ${location} sitio web contacto`;
-      try {
-        const resp = await axios.post(
-          'https://api.tavily.com/search',
-          {
-            api_key: config.TAVILY_API_KEY,
-            query,
-            search_depth: 'basic',
-            max_results: maxResults + 5,
-            include_domains: [],
-            exclude_domains: ['facebook.com', 'instagram.com', 'twitter.com', 'youtube.com', 'wikipedia.org', 'mercadolibre.com'],
-          },
-          { timeout: 15000 }
-        );
-        for (const r of resp.data?.results ?? []) {
-          if (r.url && r.title) {
-            candidateUrls.push({ title: r.title, url: r.url });
+      for (const query of queries) {
+        if (candidateUrls.length >= maxResults + 5) break;
+        try {
+          const resp = await axios.post(
+            'https://api.tavily.com/search',
+            {
+              api_key: config.TAVILY_API_KEY,
+              query,
+              search_depth: 'basic',
+              max_results: 10,
+              exclude_domains: EXCLUDE_DOMAINS,
+            },
+            { timeout: 15000 }
+          );
+          for (const r of resp.data?.results ?? []) {
+            if (r.url && r.title && !seen.has(r.url)) {
+              seen.add(r.url);
+              candidateUrls.push({ title: r.title, url: r.url });
+            }
           }
+        } catch (e: any) {
+          console.error('Tavily error:', e.message);
         }
-      } catch (e: any) {
-        console.error('Tavily error:', e.message);
       }
     }
 
     if (candidateUrls.length === 0) {
-      return `No encontré empresas de "${industry}" en ${location}. Intentá con otro término de búsqueda.`;
+      return `No encontré empresas de "${industry}" en ${location}. Intentá con una URL específica de un directorio del rubro usando scrape_leads_from_url.`;
     }
 
     // Step 2: Scrape each company website with Jina Reader to extract real contact info
