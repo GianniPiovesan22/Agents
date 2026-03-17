@@ -45,11 +45,11 @@ async function main() {
         });
         console.log("🌅 Cron job for Daily Digest initialized (08:30 AM)");
 
-        // Weekly Digest Setup (runs every Sunday at 9:00 AM)
-        cron.schedule('0 9 * * 0', async () => {
+        // Weekly Digest Setup (runs every Friday at 9:00 PM)
+        cron.schedule('0 21 * * 5', async () => {
             await sendWeeklyDigest();
         });
-        console.log("📅 Cron job for Weekly Digest initialized (Sunday 09:00 AM)");
+        console.log("📅 Cron job for Weekly Digest initialized (Friday 09:00 PM)");
 
         // Proactive Alerts (runs every 5 minutes)
         cron.schedule('*/5 * * * *', async () => {
