@@ -10,6 +10,7 @@ const configSchema = z.object({
     GROQ_API_KEY: z.string().min(1, "GROQ_API_KEY is required"),
     ANTHROPIC_API_KEY: z.string().optional(),
     TAVILY_API_KEY: z.string().optional(),
+    SERPER_API_KEY: z.string().optional(),
     GEMINI_API_KEY: z.string().optional(),
     OPENROUTER_API_KEY: z.string().optional(),
     OPENROUTER_MODEL: z.string().default("openrouter/free"),

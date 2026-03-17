@@ -69,23 +69,44 @@ registerTool({
     const queries = [
       `${industry} ${location} empresa contacto`,
       `${industry} ${location} sitio web`,
-      `"${industry}" Argentina directorio empresas`,
+      `${industry} Argentina directorio empresas`,
       `${industry} Argentina contact website`,
     ];
 
-    if (config.TAVILY_API_KEY) {
+    if (config.SERPER_API_KEY) {
+      // Use Serper (Google Search) for best local Argentine results
+      for (const query of queries) {
+        if (candidateUrls.length >= maxResults + 5) break;
+        try {
+          const resp = await axios.post(
+            'https://google.serper.dev/search',
+            { q: query, gl: 'ar', hl: 'es', num: 10 },
+            {
+              headers: { 'X-API-KEY': config.SERPER_API_KEY, 'Content-Type': 'application/json' },
+              timeout: 15000,
+            }
+          );
+          const organic = resp.data?.organic ?? [];
+          for (const r of organic) {
+            const url: string = r.link ?? '';
+            const title: string = r.title ?? '';
+            if (url && title && !seen.has(url) && !EXCLUDE_DOMAINS.some(d => url.includes(d))) {
+              seen.add(url);
+              candidateUrls.push({ title, url });
+            }
+          }
+        } catch (e: any) {
+          console.error('Serper error:', e.message);
+        }
+      }
+    } else if (config.TAVILY_API_KEY) {
+      // Fallback to Tavily if Serper not configured
       for (const query of queries) {
         if (candidateUrls.length >= maxResults + 5) break;
         try {
           const resp = await axios.post(
             'https://api.tavily.com/search',
-            {
-              api_key: config.TAVILY_API_KEY,
-              query,
-              search_depth: 'basic',
-              max_results: 10,
-              exclude_domains: EXCLUDE_DOMAINS,
-            },
+            { api_key: config.TAVILY_API_KEY, query, search_depth: 'basic', max_results: 10, exclude_domains: EXCLUDE_DOMAINS },
             { timeout: 15000 }
           );
           for (const r of resp.data?.results ?? []) {
