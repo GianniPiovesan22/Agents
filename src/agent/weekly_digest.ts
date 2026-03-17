@@ -119,26 +119,7 @@ export async function sendWeeklyDigest() {
             leadsInfo = `Total leads: ${allLeads.length} | Nuevos: ${nuevos} | Contactados: ${contactados} | Interesados: ${interesados} | Propuestas enviadas: ${propuestas} | Cerrados: ${cerrados}`;
         } catch { leadsInfo = "No se pudo obtener el estado del CRM."; }
 
-        // 6. Generar resumen con LLM
-        const promptText = `
-Sos el asistente personal de Gianni, responsable de ventas, marketing y administración de BrescoPack (empresa de maquinaria agroindustrial en Colón, Buenos Aires, Argentina).
-
-Hoy es viernes ${now.toLocaleDateString('es-AR', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}.
-
-Elaborá un resumen semanal ejecutivo para escuchar como audio de aproximadamente 2 minutos. Tono directo, espartano, sin vueltas. En español rioplatense.
-
-Estructura el resumen así:
-1. Apertura rápida (1 oración)
-2. Lo más importante que pasó en el mundo y Argentina esta semana
-3. Cómo están los mercados (dólar y crypto)
-4. Estado del CRM y leads de BrescoPack
-5. Emails y reuniones destacadas de la semana
-6. Lo que viene la próxima semana (agenda)
-7. 3 cosas concretas a tener en cuenta o hacer la próxima semana
-8. Cierre motivador breve
-
---- DATOS ---
-
+        const dataBlock = `
 NOTICIAS DE LA SEMANA:
 ${news}
 
@@ -158,29 +139,63 @@ AGENDA PRÓXIMA SEMANA:
 ${upcomingEvents}
 `;
 
-        const messages: Message[] = [{ role: 'user', content: promptText }];
-        const response = await getCompletion(messages, []);
-        if (!response.content) return;
+        // 6a. Generar script de audio (conversacional, ~2 minutos)
+        const audioPrompt = `
+Sos el asistente personal de Gianni, de BrescoPack (maquinaria agroindustrial, Colón, Buenos Aires).
+Hoy es viernes ${now.toLocaleDateString('es-AR', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}.
 
-        // 7. Enviar por voz o texto
+Escribí un resumen semanal para escuchar como audio de 2 minutos. Tono espartano, directo, en español rioplatense. Sin símbolos ni emojis — solo texto hablado fluido.
+
+Cubrí: noticias importantes, mercados, estado del CRM, agenda de la próxima semana, 3 acciones concretas. Cerrá con frase motivadora.
+
+${dataBlock}`;
+
+        // 6b. Generar resumen de texto estructurado con emojis y secciones
+        const textPrompt = `
+Sos el asistente personal de Gianni, de BrescoPack (maquinaria agroindustrial, Colón, Buenos Aires).
+Hoy es viernes ${now.toLocaleDateString('es-AR', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}.
+
+Generá un resumen semanal en texto para Telegram. Usá emojis como bullets y separadores entre secciones. Sin markdown (no uses # ni **). Texto limpio, estructurado, fácil de leer en el celular.
+
+Secciones obligatorias:
+🌍 NOTICIAS DE LA SEMANA
+💰 MERCADOS
+🎯 CRM Y LEADS
+📧 EMAILS Y REUNIONES
+📅 PRÓXIMA SEMANA
+✅ 3 ACCIONES CONCRETAS PARA LA SEMANA
+
+${dataBlock}`;
+
+        const [audioResp, textResp] = await Promise.all([
+            getCompletion([{ role: 'user', content: audioPrompt }], []),
+            getCompletion([{ role: 'user', content: textPrompt }], []),
+        ]);
+
+        // 7. Enviar audio + texto
         let audioPath: string | null = null;
         try {
-            if (config.ELEVENLABS_API_KEY) {
-                audioPath = await textToSpeech(response.content);
-                const { InputFile } = await import('grammy');
+            const { InputFile } = await import('grammy');
+
+            // Send audio
+            if (config.ELEVENLABS_API_KEY && audioResp.content) {
+                audioPath = await textToSpeech(audioResp.content);
                 for (const userId of config.TELEGRAM_ALLOWED_USER_IDS) {
                     try {
-                        await bot.api.sendVoice(userId, new InputFile(audioPath), { caption: "Resumen Semanal — Viernes" });
+                        await bot.api.sendVoice(userId, new InputFile(audioPath), { caption: "Resumen Semanal — Viernes 21hs" });
                     } catch (err: any) {
-                        console.error(`Error enviando weekly digest al user ${userId}`, err.message);
+                        console.error(`Error enviando audio a ${userId}`, err.message);
                     }
                 }
-            } else {
+            }
+
+            // Send structured text
+            if (textResp.content) {
                 for (const userId of config.TELEGRAM_ALLOWED_USER_IDS) {
                     try {
-                        await bot.api.sendMessage(userId, response.content);
+                        await bot.api.sendMessage(userId, textResp.content);
                     } catch (err: any) {
-                        console.error(`Error enviando weekly digest (texto) al user ${userId}`, err.message);
+                        console.error(`Error enviando texto a ${userId}`, err.message);
                     }
                 }
             }
