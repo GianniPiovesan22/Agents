@@ -274,68 +274,85 @@ export async function sendDailyDigest() {
             grainInfo = ""; // silently skip — never block the digest
         }
 
-        // 9. Crear el prompt
-        const promptText = `
-Sos un asistente ejecutivo estelar. Elaborá un script para ser leído en un audio corto de no más de 1 minuto, arrancando con un tono motivador de buenos días (hoy es ${new Date().toLocaleDateString('es-AR')}).
-Debes darle al usuario su "Daily Digest" basado en la siguiente información recopilada:
+        const dataBlock = `
+EMAILS IMPORTANTES:
+${emails || "Sin emails nuevos."}
 
-Emails importantes sin leer:
-${emails || "Ningún email nuevo destacable."}
+AGENDA DEL DÍA:
+${events || "Agenda libre."}
 
-Eventos del calendario para hoy:
-${events || "Tenés la agenda libre de reuniones por hoy."}
-
-Cotizaciones del dólar:
+COTIZACIONES DÓLAR:
 ${dolarInfo}
 
-Clima en Buenos Aires:
+CLIMA:
 ${weather}
 
-Criptomonedas:
+MERCADOS CRYPTO:
 ${cryptoInfo}
 
-Eventos económicos de alto impacto para hoy:
+EVENTOS ECONÓMICOS HOY:
 ${forexEventsInfo}
-${grainInfo ? `\nPrecios de granos (BCR Rosario):\n${grainInfo}` : ''}
-Recordatorios pendientes:
-${remindersInfo || "Sin recordatorios pendientes."}
-
-Haz que suene coloquial, cálido y enfocado al éxito del día. Mencioná brevemente las cotizaciones, el clima, los eventos económicos importantes del día y los reminders si los hay.
+${grainInfo ? `\nGRANOS (BCR Rosario):\n${grainInfo}` : ''}
+RECORDATORIOS PENDIENTES:
+${remindersInfo || "Sin recordatorios."}
 `;
 
-        const messages: Message[] = [{ role: 'user', content: promptText }];
-        const response = await getCompletion(messages, []);
+        // 9. Generar audio script + texto estructurado en paralelo
+        const today = new Date();
+        const fechaHoy = today.toLocaleDateString('es-AR', { weekday: 'long', day: 'numeric', month: 'long' });
 
-        if (!response.content) return;
+        const audioPrompt = `Sos el asistente personal de Gianni, de BrescoPack (maquinaria agroindustrial, Colón, Buenos Aires).
+Hoy es ${fechaHoy}. Elaborá un script para audio de máximo 1 minuto. Tono espartano, directo, motivador. Sin símbolos ni emojis — solo texto hablado fluido. Español rioplatense.
+Cubrí: agenda, emails importantes, cotizaciones clave, clima y recordatorios. Cerrá con frase motivadora corta.
+${dataBlock}`;
 
-        // 8. Generar Voz y Enviar a todos los administradores (allowed users)
+        const textPrompt = `Sos el asistente personal de Gianni, de BrescoPack (maquinaria agroindustrial, Colón, Buenos Aires).
+Hoy es ${fechaHoy}. Generá un resumen diario en texto para Telegram. Usá emojis como bullets y separadores entre secciones. Sin markdown (no uses # ni **). Texto limpio, estructurado, fácil de leer en el celular.
+
+Secciones obligatorias (solo incluir si hay datos):
+📅 AGENDA DE HOY
+📧 EMAILS IMPORTANTES
+💵 COTIZACIONES
+🌤 CLIMA
+🌾 GRANOS
+📊 MERCADOS
+⚠️ EVENTOS ECONÓMICOS
+⏰ RECORDATORIOS
+
+${dataBlock}`;
+
+        const [audioResp, textResp] = await Promise.all([
+            getCompletion([{ role: 'user', content: audioPrompt }], []),
+            getCompletion([{ role: 'user', content: textPrompt }], []),
+        ]);
+
+        // 10. Enviar audio + texto
         let audioPath: string | null = null;
         try {
-            if (config.ELEVENLABS_API_KEY) {
-                audioPath = await textToSpeech(response.content);
-                const { InputFile } = await import('grammy');
+            const { InputFile } = await import('grammy');
 
+            if (config.ELEVENLABS_API_KEY && audioResp.content) {
+                audioPath = await textToSpeech(audioResp.content);
                 for (const userId of config.TELEGRAM_ALLOWED_USER_IDS) {
                     try {
-                        await bot.api.sendVoice(userId, new InputFile(audioPath), { caption: "Tu Resumen Diario (Daily Digest)" });
-                    } catch (telegramErr) {
-                        console.error(`Error enviando digest al user ${userId}`, telegramErr);
+                        await bot.api.sendVoice(userId, new InputFile(audioPath), { caption: "Daily Digest — Buenos días 🌅" });
+                    } catch (err: any) {
+                        console.error(`Error enviando audio digest a ${userId}`, err.message);
                     }
                 }
-            } else {
-                // Fallback: send as text if ElevenLabs not configured
+            }
+
+            if (textResp.content) {
                 for (const userId of config.TELEGRAM_ALLOWED_USER_IDS) {
                     try {
-                        await bot.api.sendMessage(userId, response.content);
-                    } catch (telegramErr) {
-                        console.error(`Error enviando digest (texto) al user ${userId}`, telegramErr);
+                        await bot.api.sendMessage(userId, textResp.content);
+                    } catch (err: any) {
+                        console.error(`Error enviando texto digest a ${userId}`, err.message);
                     }
                 }
             }
         } finally {
-            if (audioPath && fs.existsSync(audioPath)) {
-                fs.unlinkSync(audioPath);
-            }
+            if (audioPath && fs.existsSync(audioPath)) fs.unlinkSync(audioPath);
         }
 
     } catch (error) {
