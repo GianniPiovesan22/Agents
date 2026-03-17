@@ -155,7 +155,17 @@ FORMATTING (CRITICAL):
         if (!response) return "Tuve un error procesando tu mensaje.";
 
         if (!response.tool_calls || response.tool_calls.length === 0) {
-            return response.content || "No tengo una respuesta en este momento.";
+            let content = response.content || "No tengo una respuesta en este momento.";
+            // Inject any IMG tags from tool results that the LLM forgot to include
+            messages.filter(m => m.role === 'tool').forEach(msg => {
+                if (msg.content) {
+                    const match = msg.content.match(/\[IMG:(.+?)\]/);
+                    if (match && !content.includes(match[0])) {
+                        content = match[0];
+                    }
+                }
+            });
+            return content;
         }
 
         messages.push({
