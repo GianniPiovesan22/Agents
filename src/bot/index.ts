@@ -2,7 +2,7 @@ import { Bot } from 'grammy';
 import { config } from '../config/index.js';
 import { getHistory, saveMessage } from '../database/index.js';
 import { runAgent } from '../agent/loop.js';
-import { transcribeAudio, textToSpeech } from '../llm/index.js';
+import { transcribeAudio, textToSpeech, getCompletion, Message } from '../llm/index.js';
 import path from 'path';
 import fs from 'fs';
 import os from 'os';
@@ -186,26 +186,50 @@ bot.on('message:photo', async (ctx) => {
 
     const bestPhoto = photos[photos.length - 1];
 
+    // Reject files over 15MB
+    if (bestPhoto.file_size && bestPhoto.file_size > 15 * 1024 * 1024) {
+        await ctx.reply("La imagen es demasiado grande (máx. 15MB).");
+        return;
+    }
+
     let tempFile: string | null = null;
     try {
+        await ctx.reply("📸 Procesando imagen...");
         await ctx.replyWithChatAction('typing');
-        tempFile = await downloadTelegramFile(bestPhoto.file_id);
 
-        const data = fs.readFileSync(tempFile, { encoding: 'base64' });
-        const mimeType = tempFile.endsWith('.png') ? 'image/png' : 'image/jpeg';
+        const file = await bot.api.getFile(bestPhoto.file_id);
+        const fileUrl = `https://api.telegram.org/file/bot${config.TELEGRAM_BOT_TOKEN}/${file.file_path}`;
+        const response = await axios.get(fileUrl, { responseType: 'arraybuffer', timeout: 30000 });
 
-        const caption = ctx.message.caption || "Analiza esta imagen.";
+        if (response.data.byteLength > 15 * 1024 * 1024) {
+            await ctx.reply("La imagen es demasiado grande para procesar (máx. 15MB).");
+            return;
+        }
 
-        await handleResponse(ctx, userId, caption, false, [{ mimeType, data }]);
-    } catch (error) {
+        const base64Data = Buffer.from(response.data).toString('base64');
+        const caption = ctx.message.caption || 'Analizá esta imagen y describí lo que ves. Si hay maquinaria, instalaciones o documentos, extraé información relevante.';
+
+        const messages: Message[] = [
+            {
+                role: 'user',
+                content: caption,
+                images: [{ mimeType: 'image/jpeg', data: base64Data }],
+            }
+        ];
+
+        const result = await getCompletion(messages);
+        const analysisText = result.content || 'No pude analizar la imagen.';
+
+        await ctx.reply(analysisText);
+    } catch (error: any) {
         console.error("Photo Handler Error:", error);
-        await ctx.reply("Hubo un problema procesando tu imagen.");
+        await ctx.reply("Hubo un problema procesando tu imagen. Intentá de nuevo.");
     } finally {
         if (tempFile && fs.existsSync(tempFile)) fs.unlinkSync(tempFile);
     }
 });
 
-// Handler for documents (PDF, CSV, TXT)
+// Handler for documents (PDF, images sent as files, CSV, TXT)
 bot.on('message:document', async (ctx) => {
     const userId = ctx.from.id.toString();
     const document = ctx.message.document;
@@ -213,52 +237,91 @@ bot.on('message:document', async (ctx) => {
 
     const mime = document.mime_type || '';
     const fileName = document.file_name?.toLowerCase() || '';
+    const isPdf = mime === 'application/pdf' || fileName.endsWith('.pdf');
+    const isImage = mime.startsWith('image/');
+    const isCsvOrTxt = mime.includes('csv') || mime.includes('text') || fileName.match(/\.(csv|txt)$/);
 
-    // Check if it's supported
-    if (!mime.includes('pdf') && !mime.includes('csv') && !mime.includes('text') && !fileName.match(/\.(pdf|csv|txt)$/)) {
-        await ctx.reply("Archivos soportados por el momento: PDF, CSV, TXT.");
+    if (!isPdf && !isImage && !isCsvOrTxt) {
+        await ctx.reply("Solo puedo analizar PDFs e imágenes por ahora.");
+        return;
+    }
+
+    // Reject files over 15MB
+    if (document.file_size && document.file_size > 15 * 1024 * 1024) {
+        await ctx.reply("El archivo es demasiado grande para procesar (máx. 15MB).");
         return;
     }
 
     let tempFile: string | null = null;
     try {
+        await ctx.reply("📄 Procesando documento...");
         await ctx.replyWithChatAction('typing');
-        tempFile = await downloadTelegramFile(document.file_id);
 
-        let extractedText = '';
+        const file = await bot.api.getFile(document.file_id);
+        const fileUrl = `https://api.telegram.org/file/bot${config.TELEGRAM_BOT_TOKEN}/${file.file_path}`;
+        const response = await axios.get(fileUrl, { responseType: 'arraybuffer', timeout: 30000 });
 
-        if (fileName.endsWith('.pdf') || mime.includes('pdf')) {
-            const pdfParseCtx = await import('pdf-parse') as any;
-            const pdfParse = pdfParseCtx.default || pdfParseCtx;
-            const dataBuffer = fs.readFileSync(tempFile);
-            const data = await pdfParse(dataBuffer);
-            extractedText = data.text;
-        } else if (fileName.endsWith('.csv') || mime.includes('csv')) {
-            const csvCtx = await import('csv-parser');
-            const csv = csvCtx.default;
-            const results: any[] = [];
-            await new Promise((resolve, reject) => {
-                fs.createReadStream(tempFile!)
-                    .pipe(csv())
-                    .on('data', (data: any) => results.push(data))
-                    .on('end', () => resolve(results))
-                    .on('error', reject);
-            });
-            extractedText = JSON.stringify(results, null, 2);
+        if (response.data.byteLength > 15 * 1024 * 1024) {
+            await ctx.reply("El archivo es demasiado grande para procesar (máx. 15MB).");
+            return;
+        }
+
+        const caption = ctx.message.caption;
+
+        if (isPdf) {
+            const base64Data = Buffer.from(response.data).toString('base64');
+            const promptText = caption || 'Analizá este documento PDF y extraé la información más relevante: datos de contacto, precios, condiciones, fechas importantes.';
+
+            const messages: Message[] = [
+                {
+                    role: 'user',
+                    content: promptText,
+                    documents: [{ mimeType: 'application/pdf', data: base64Data }],
+                }
+            ];
+
+            const result = await getCompletion(messages);
+            const analysisText = result.content || 'No pude analizar el documento.';
+            await ctx.reply(analysisText);
+
+        } else if (isImage) {
+            const base64Data = Buffer.from(response.data).toString('base64');
+            const imageMediaType = (mime.startsWith('image/') ? mime : 'image/jpeg') as 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp';
+            const promptText = caption || 'Analizá esta imagen y describí lo que ves. Si hay maquinaria, instalaciones o documentos, extraé información relevante.';
+
+            const messages: Message[] = [
+                {
+                    role: 'user',
+                    content: promptText,
+                    images: [{ mimeType: imageMediaType, data: base64Data }],
+                }
+            ];
+
+            const result = await getCompletion(messages);
+            const analysisText = result.content || 'No pude analizar la imagen.';
+            await ctx.reply(analysisText);
+
         } else {
-            extractedText = fs.readFileSync(tempFile, 'utf-8');
+            // CSV / TXT — read as text and send through agent
+            tempFile = path.join(os.tmpdir(), `doc_${document.file_id}_${Date.now()}`);
+            fs.writeFileSync(tempFile, Buffer.from(response.data));
+
+            let extractedText = '';
+            if (isCsvOrTxt) {
+                extractedText = fs.readFileSync(tempFile, 'utf-8');
+            }
+
+            if (extractedText.length > 20000) {
+                extractedText = extractedText.substring(0, 20000) + '\n... [Texto truncado por longitud]';
+            }
+
+            const prompt = `Analizá el siguiente documento llamado ${document.file_name}:\n\n${extractedText}`;
+            await handleResponse(ctx, userId, prompt, false);
         }
 
-        if (extractedText.length > 20000) {
-            extractedText = extractedText.substring(0, 20000) + "\n... [Texto truncado por longitud]";
-        }
-
-        const prompt = `Analiza el siguiente documento llamado ${document.file_name}:\n\n${extractedText}`;
-        await handleResponse(ctx, userId, prompt, false);
-
-    } catch (error) {
+    } catch (error: any) {
         console.error("Document Handler Error:", error);
-        await ctx.reply("Hubo un problema procesando tu documento.");
+        await ctx.reply("Hubo un problema procesando tu documento. Intentá de nuevo.");
     } finally {
         if (tempFile && fs.existsSync(tempFile)) fs.unlinkSync(tempFile);
     }

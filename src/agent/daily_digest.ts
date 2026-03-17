@@ -233,6 +233,47 @@ export async function sendDailyDigest() {
             remindersInfo = "No pudimos obtener los recordatorios.";
         }
 
+        // 7. Precios de granos argentinos (BCR Rosario)
+        let grainInfo = "";
+        try {
+            const jinaGrainRes = await axios.get(
+                'https://r.jina.ai/https://www.bcr.com.ar/es/mercados/granos/pizarra-de-precios',
+                { headers: { 'Accept': 'text/plain' }, timeout: 15000 }
+            );
+            const markdown: string = typeof jinaGrainRes.data === 'string'
+                ? jinaGrainRes.data
+                : JSON.stringify(jinaGrainRes.data);
+
+            const cropAliases: Record<string, string[]> = {
+                Soja: ['soja'],
+                Maíz: ['maíz', 'maiz'],
+                Trigo: ['trigo'],
+                Girasol: ['girasol'],
+            };
+
+            const found: string[] = [];
+            for (const line of markdown.split('\n')) {
+                const lower = line.toLowerCase();
+                for (const [displayName, aliases] of Object.entries(cropAliases)) {
+                    if (found.some(f => f.startsWith(displayName))) continue;
+                    if (!aliases.some(a => lower.includes(a))) continue;
+                    const priceMatch = line.match(/USD\s*([\d.,]+)/i) ||
+                        line.match(/US\$\s*([\d.,]+)/i) ||
+                        line.match(/([\d.,]+)\s*USD/i);
+                    if (priceMatch) {
+                        const num = parseFloat(priceMatch[1].replace(/\./g, '').replace(',', '.'));
+                        if (!isNaN(num) && num > 50 && num < 100000) {
+                            found.push(`${displayName}: USD ${num}`);
+                        }
+                    }
+                }
+            }
+
+            grainInfo = found.length > 0 ? found.join(' | ') : "No disponible";
+        } catch (_) {
+            grainInfo = ""; // silently skip — never block the digest
+        }
+
         // 9. Crear el prompt
         const promptText = `
 Sos un asistente ejecutivo estelar. Elaborá un script para ser leído en un audio corto de no más de 1 minuto, arrancando con un tono motivador de buenos días (hoy es ${new Date().toLocaleDateString('es-AR')}).
@@ -255,7 +296,7 @@ ${cryptoInfo}
 
 Eventos económicos de alto impacto para hoy:
 ${forexEventsInfo}
-
+${grainInfo ? `\nPrecios de granos (BCR Rosario):\n${grainInfo}` : ''}
 Recordatorios pendientes:
 ${remindersInfo || "Sin recordatorios pendientes."}
 

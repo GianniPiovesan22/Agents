@@ -107,4 +107,137 @@ registerTool({
     },
 });
 
-console.log('💰 Markets tools registered (DolarAPI + CoinGecko)');
+// ── Argentine Grain Prices ─────────────────────────────────────
+registerTool({
+    definition: {
+        type: 'function',
+        function: {
+            name: 'get_grain_prices',
+            description: 'Get current Argentine grain prices (soja, maíz, trigo, girasol) from BCR Rosario pizarra. Use when the user asks about grain prices, commodities, or agro markets in Argentina.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    crops: {
+                        type: 'array',
+                        items: { type: 'string' },
+                        description: 'Optional list of crops to show (e.g. ["soja", "maiz"]). Default: all (soja, maiz, trigo, girasol).',
+                    },
+                },
+                required: [],
+            },
+        },
+    },
+    execute: async (args) => {
+        const requestedCrops: string[] = args.crops && args.crops.length > 0
+            ? args.crops.map((c: string) => c.toLowerCase())
+            : ['soja', 'maiz', 'trigo', 'girasol'];
+
+        const cropAliases: Record<string, string[]> = {
+            soja: ['soja', 'soybean', 'soy'],
+            maiz: ['maíz', 'maiz', 'corn'],
+            trigo: ['trigo', 'wheat'],
+            girasol: ['girasol', 'sunflower'],
+        };
+
+        const cropEmojis: Record<string, string> = {
+            soja: '🟡',
+            maiz: '🟡',
+            trigo: '🟡',
+            girasol: '🌻',
+        };
+
+        const sources = [
+            'https://r.jina.ai/https://www.bcr.com.ar/es/mercados/granos/pizarra-de-precios',
+            'https://r.jina.ai/https://news.agrofy.com.ar/mercados/precios-granos',
+        ];
+
+        let markdown = '';
+        let sourceName = 'BCR Rosario';
+
+        for (let i = 0; i < sources.length; i++) {
+            try {
+                const res = await axios.get(sources[i], {
+                    headers: { 'Accept': 'text/plain' },
+                    timeout: 20000,
+                });
+                markdown = typeof res.data === 'string' ? res.data : JSON.stringify(res.data);
+                sourceName = i === 0 ? 'BCR Rosario' : 'Agrofy';
+                if (markdown.length > 5) break;
+            } catch (_) {
+                // try next source
+            }
+        }
+
+        if (!markdown || markdown.length < 5) {
+            return 'No se pudieron obtener los precios de granos en este momento. Intentá más tarde.';
+        }
+
+        // Parse prices — look for patterns like USD 250/tn, $120000/tn, 250 USD, etc.
+        const prices: Record<string, string> = {};
+
+        const lines = markdown.split('\n');
+        for (const line of lines) {
+            const lower = line.toLowerCase();
+            for (const [cropKey, aliases] of Object.entries(cropAliases)) {
+                if (prices[cropKey]) continue; // already found
+                if (!aliases.some(a => lower.includes(a))) continue;
+
+                // Try to extract price — various formats
+                const pricePatterns = [
+                    /USD\s*([\d.,]+)/i,
+                    /US\$\s*([\d.,]+)/i,
+                    /\$\s*([\d.,]+)\s*\/?\s*tn/i,
+                    /([\d.,]+)\s*USD/i,
+                    /([\d.,]+)\s*usd/i,
+                    /\|\s*([\d.,]+)\s*\|/,
+                    /([\d.]{3,})/,
+                ];
+
+                for (const pattern of pricePatterns) {
+                    const match = line.match(pattern);
+                    if (match) {
+                        const val = match[1].replace(/\./g, '').replace(',', '.');
+                        const num = parseFloat(val);
+                        // Sanity check: grain prices are typically between 100 and 500 USD/tn
+                        if (!isNaN(num) && num > 50 && num < 100000) {
+                            prices[cropKey] = num > 1000 ? `AR$${num.toLocaleString('es-AR')}` : `USD ${num.toLocaleString('es-AR')}`;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        const now = new Date().toLocaleString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires' });
+        const dateStr = new Date().toLocaleDateString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires' });
+
+        let result = `🌾 Pizarra ${sourceName}\n📅 ${dateStr}\n\n`;
+
+        let found = false;
+        for (const cropKey of requestedCrops) {
+            if (cropAliases[cropKey] || cropKey) {
+                const normalizedKey = Object.keys(cropAliases).find(k =>
+                    cropAliases[k].includes(cropKey) || k === cropKey
+                ) || cropKey;
+
+                const emoji = cropEmojis[normalizedKey] || '🌾';
+                const displayName = normalizedKey.charAt(0).toUpperCase() + normalizedKey.slice(1);
+                const price = prices[normalizedKey];
+
+                if (price) {
+                    result += `${emoji} ${displayName}: ${price}/tn\n`;
+                    found = true;
+                }
+            }
+        }
+
+        if (!found) {
+            result += 'No se pudieron parsear los precios de la fuente. El formato puede haber cambiado.\n';
+        }
+
+        result += `\n🕐 Actualizado: ${now}`;
+        return result;
+    },
+});
+
+console.log('💰 Markets tools registered (DolarAPI + CoinGecko + BCR Grains)');

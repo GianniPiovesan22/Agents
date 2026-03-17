@@ -96,6 +96,7 @@ You have access to the following tools to help the user:
 - get_economic_calendar: Fetch Forex Factory economic calendar with upcoming events filtered by impact (high/medium/low/all) and days ahead
 - get_forex_news: Fetch the latest forex news from Forex Factory (top 10 items)
 - get_stock_price: Get real-time stock prices, market indices (S&P 500, Nasdaq, Merval), ETFs, forex pairs, and commodities using Yahoo Finance
+- get_grain_prices: Precios actuales de soja, maíz, trigo y girasol desde la BCR de Rosario
 
 **Social Content:**
 - get_social_content_guide: Get the Social Content strategy guide, templates, and hook formulas for social media

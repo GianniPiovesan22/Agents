@@ -80,6 +80,7 @@ export interface Message {
     tool_call_id?: string;
     name?: string;
     images?: { mimeType: string, data: string }[];
+    documents?: { mimeType: string, data: string }[]; // base64-encoded documents (PDF)
     tool_calls?: ToolCallResult[]; // for in-memory use (Anthropic format)
 }
 
@@ -122,6 +123,14 @@ function convertMessagesForAnthropic(messages: Message[]) {
                     parts.push({
                         type: 'image',
                         source: { type: 'base64', media_type: img.mimeType, data: img.data },
+                    });
+                }
+            }
+            if (msg.documents) {
+                for (const doc of msg.documents) {
+                    parts.push({
+                        type: 'document',
+                        source: { type: 'base64', media_type: doc.mimeType, data: doc.data },
                     });
                 }
             }
