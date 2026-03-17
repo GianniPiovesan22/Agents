@@ -58,7 +58,7 @@ registerTool({
                     continue;
                 }
 
-                const mimeType = imagePart.inlineData.mimeType;
+                const mimeType = imagePart.inlineData.mimeType ?? 'image/png';
                 const ext = mimeType.includes('png') ? 'png' : 'jpg';
                 const tempPath = path.join(os.tmpdir(), `img_${Date.now()}.${ext}`);
                 const buffer = Buffer.from(imagePart.inlineData.data, 'base64');
