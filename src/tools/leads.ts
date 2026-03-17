@@ -97,43 +97,45 @@ registerTool({
     const results: string[] = [];
 
     for (const candidate of candidateUrls.slice(0, maxResults)) {
+      let emails: string[] = [];
+      let phones: string[] = [];
+      let companyName = candidate.title.slice(0, 80);
+
+      // Try Jina scraping for contact details — fall back to Tavily data if it fails
       try {
         const jinaResp = await axios.get(`https://r.jina.ai/${candidate.url}`, {
           timeout: 12000,
           headers: { Accept: 'text/plain' },
         });
         const pageText: string = typeof jinaResp.data === 'string' ? jinaResp.data.slice(0, 8000) : '';
-
-        const emails = extractEmails(pageText);
-        const phones = extractPhones(pageText);
-
-        // Extract a clean company name from page title or candidate title
+        emails = extractEmails(pageText);
+        phones = extractPhones(pageText);
         const titleMatch = pageText.match(/^#\s+(.+)$/m);
-        const companyName = titleMatch?.[1]?.trim().slice(0, 80) ?? candidate.title.slice(0, 80);
-
-        const id = saveLead({
-          company_name: companyName,
-          email: emails[0] ?? undefined,
-          phone: phones[0] ?? undefined,
-          website: candidate.url,
-          industry,
-          location,
-          source: 'web_search',
-          status: 'nuevo',
-        });
-
-        if (id > 0) {
-          saved++;
-          const contact = [emails[0], phones[0]].filter(Boolean).join(' | ') || 'sin contacto extraído';
-          results.push(`✅ ${companyName} — ${contact}`);
-        }
+        if (titleMatch?.[1]) companyName = titleMatch[1].trim().slice(0, 80);
       } catch {
-        // Skip URLs that fail to scrape
+        // Jina failed — save with Tavily data only
+      }
+
+      const id = saveLead({
+        company_name: companyName,
+        email: emails[0] ?? undefined,
+        phone: phones[0] ?? undefined,
+        website: candidate.url,
+        industry,
+        location,
+        source: 'web_search',
+        status: 'nuevo',
+      });
+
+      if (id > 0) {
+        saved++;
+        const contact = [emails[0], phones[0]].filter(Boolean).join(' | ') || 'sin contacto (visitá el sitio)';
+        results.push(`✅ ${companyName} — ${contact}`);
       }
     }
 
     if (saved === 0) {
-      return `Encontré empresas pero no pude extraer datos de contacto. Intentá con scrape_leads_from_url en alguna de estas URLs directamente.`;
+      return `No pude encontrar ni guardar empresas de "${industry}" en ${location}. Intentá con otro término de búsqueda.`;
     }
 
     return `Guardé ${saved} leads de "${industry}" en ${location}:\n\n${results.join('\n')}\n\nUsá "mostrame los leads" para ver el detalle completo.`;
