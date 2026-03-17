@@ -930,4 +930,282 @@ registerTool({
     },
 });
 
+// ═══════════════════════════════════════════════════════════════
+// GMAIL — DELETE / TRASH
+// ═══════════════════════════════════════════════════════════════
+
+registerTool({
+    definition: {
+        type: 'function',
+        function: {
+            name: 'gmail_delete',
+            description: 'Move a Gmail message or thread to trash.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    message_id: {
+                        type: 'string',
+                        description: 'The Gmail message ID to trash'
+                    }
+                },
+                required: ['message_id'],
+            },
+        },
+    },
+    execute: async (args) => {
+        try {
+            const auth = getGoogleAuth();
+            const gmail = google.gmail({ version: 'v1', auth });
+            await gmail.users.messages.trash({ userId: 'me', id: args.message_id });
+            return `Mensaje ${args.message_id} movido a la papelera.`;
+        } catch (error: any) {
+            if (isNotConfigured(error)) return NOT_CONFIGURED;
+            return `Error eliminando mensaje: ${error.message}`;
+        }
+    },
+});
+
+registerTool({
+    definition: {
+        type: 'function',
+        function: {
+            name: 'gmail_mark_read',
+            description: 'Mark a Gmail message as read or unread.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    message_id: {
+                        type: 'string',
+                        description: 'The Gmail message ID'
+                    },
+                    read: {
+                        type: 'boolean',
+                        description: 'true to mark as read, false to mark as unread'
+                    }
+                },
+                required: ['message_id', 'read'],
+            },
+        },
+    },
+    execute: async (args) => {
+        try {
+            const auth = getGoogleAuth();
+            const gmail = google.gmail({ version: 'v1', auth });
+            await gmail.users.messages.modify({
+                userId: 'me',
+                id: args.message_id,
+                requestBody: {
+                    removeLabelIds: args.read ? ['UNREAD'] : [],
+                    addLabelIds: args.read ? [] : ['UNREAD'],
+                },
+            });
+            return `Mensaje marcado como ${args.read ? 'leído' : 'no leído'}.`;
+        } catch (error: any) {
+            if (isNotConfigured(error)) return NOT_CONFIGURED;
+            return `Error actualizando mensaje: ${error.message}`;
+        }
+    },
+});
+
+// ═══════════════════════════════════════════════════════════════
+// CALENDAR — DELETE EVENT
+// ═══════════════════════════════════════════════════════════════
+
+registerTool({
+    definition: {
+        type: 'function',
+        function: {
+            name: 'calendar_delete_event',
+            description: 'Delete an event from Google Calendar.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    event_id: {
+                        type: 'string',
+                        description: 'The ID of the calendar event to delete'
+                    }
+                },
+                required: ['event_id'],
+            },
+        },
+    },
+    execute: async (args) => {
+        try {
+            const auth = getGoogleAuth();
+            const calendar = google.calendar({ version: 'v3', auth });
+            await calendar.events.delete({ calendarId: 'primary', eventId: args.event_id });
+            return `Evento ${args.event_id} eliminado correctamente.`;
+        } catch (error: any) {
+            if (isNotConfigured(error)) return NOT_CONFIGURED;
+            return `Error eliminando evento: ${error.message}`;
+        }
+    },
+});
+
+// ═══════════════════════════════════════════════════════════════
+// DRIVE — CREATE FOLDER / MOVE FILE / SHARE FILE / DELETE FILE
+// ═══════════════════════════════════════════════════════════════
+
+registerTool({
+    definition: {
+        type: 'function',
+        function: {
+            name: 'drive_create_folder',
+            description: 'Create a new folder in Google Drive.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    name: {
+                        type: 'string',
+                        description: 'Name of the new folder'
+                    },
+                    parent_id: {
+                        type: 'string',
+                        description: 'Parent folder ID (omit to create in root)'
+                    }
+                },
+                required: ['name'],
+            },
+        },
+    },
+    execute: async (args) => {
+        try {
+            const auth = getGoogleAuth();
+            const drive = google.drive({ version: 'v3', auth });
+            const res = await drive.files.create({
+                requestBody: {
+                    name: args.name,
+                    mimeType: 'application/vnd.google-apps.folder',
+                    parents: args.parent_id ? [args.parent_id] : undefined,
+                },
+                fields: 'id, name',
+            });
+            return `Carpeta "${res.data.name}" creada. ID: ${res.data.id}`;
+        } catch (error: any) {
+            if (isNotConfigured(error)) return NOT_CONFIGURED;
+            return `Error creando carpeta: ${error.message}`;
+        }
+    },
+});
+
+registerTool({
+    definition: {
+        type: 'function',
+        function: {
+            name: 'drive_move_file',
+            description: 'Move a file to a different folder in Google Drive.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    file_id: {
+                        type: 'string',
+                        description: 'The ID of the file to move'
+                    },
+                    folder_id: {
+                        type: 'string',
+                        description: 'The ID of the destination folder'
+                    }
+                },
+                required: ['file_id', 'folder_id'],
+            },
+        },
+    },
+    execute: async (args) => {
+        try {
+            const auth = getGoogleAuth();
+            const drive = google.drive({ version: 'v3', auth });
+            const file = await drive.files.get({ fileId: args.file_id, fields: 'parents' });
+            const previousParents = (file.data.parents ?? []).join(',');
+            const res = await drive.files.update({
+                fileId: args.file_id,
+                addParents: args.folder_id,
+                removeParents: previousParents,
+                fields: 'id, name, parents',
+            });
+            return `Archivo "${res.data.name}" movido correctamente.`;
+        } catch (error: any) {
+            if (isNotConfigured(error)) return NOT_CONFIGURED;
+            return `Error moviendo archivo: ${error.message}`;
+        }
+    },
+});
+
+registerTool({
+    definition: {
+        type: 'function',
+        function: {
+            name: 'drive_share_file',
+            description: 'Share a Google Drive file with someone by email.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    file_id: {
+                        type: 'string',
+                        description: 'The ID of the file to share'
+                    },
+                    email: {
+                        type: 'string',
+                        description: 'Email address of the person to share with'
+                    },
+                    role: {
+                        type: 'string',
+                        enum: ['reader', 'commenter', 'writer'],
+                        description: 'Permission level: reader, commenter, or writer. Default: reader'
+                    }
+                },
+                required: ['file_id', 'email'],
+            },
+        },
+    },
+    execute: async (args) => {
+        try {
+            const auth = getGoogleAuth();
+            const drive = google.drive({ version: 'v3', auth });
+            await drive.permissions.create({
+                fileId: args.file_id,
+                requestBody: {
+                    type: 'user',
+                    role: args.role ?? 'reader',
+                    emailAddress: args.email,
+                },
+            });
+            return `Archivo compartido con ${args.email} como ${args.role ?? 'reader'}.`;
+        } catch (error: any) {
+            if (isNotConfigured(error)) return NOT_CONFIGURED;
+            return `Error compartiendo archivo: ${error.message}`;
+        }
+    },
+});
+
+registerTool({
+    definition: {
+        type: 'function',
+        function: {
+            name: 'drive_delete_file',
+            description: 'Move a file to trash in Google Drive.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    file_id: {
+                        type: 'string',
+                        description: 'The ID of the file to delete'
+                    }
+                },
+                required: ['file_id'],
+            },
+        },
+    },
+    execute: async (args) => {
+        try {
+            const auth = getGoogleAuth();
+            const drive = google.drive({ version: 'v3', auth });
+            await drive.files.update({ fileId: args.file_id, requestBody: { trashed: true } });
+            return `Archivo ${args.file_id} movido a la papelera.`;
+        } catch (error: any) {
+            if (isNotConfigured(error)) return NOT_CONFIGURED;
+            return `Error eliminando archivo: ${error.message}`;
+        }
+    },
+});
+
 console.log('Google Workspace tools registered (Gmail, Calendar, Drive, Contacts, Sheets, Docs, + new tools)');

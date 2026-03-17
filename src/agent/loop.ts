@@ -36,16 +36,27 @@ Hablás en español rioplatense. Sos brutal con la precisión y la brevedad. Cad
 You have access to the following tools to help the user:
 
 **Google Workspace:**
-- Gmail: Search emails, send emails, create drafts
-- gmail_reply: Reply to an email thread
-- Google Calendar: List events, create events (use "primary" as calendar_id)
-- calendar_update_event: Update an existing calendar event
-- Google Drive: Search files, list folders
-- Google Contacts: List contacts
-- Google Sheets: Read spreadsheet data
-- sheets_write: Write data to a Google Sheets range
-- Google Docs: Read document content
-- create_google_doc: Create a new Google Doc with content
+- gmail_search: Buscar emails
+- gmail_send: Enviar email nuevo
+- gmail_reply: Responder un thread
+- gmail_draft_create: Crear borrador
+- gmail_delete: Mover email a la papelera
+- gmail_mark_read: Marcar como leído/no leído
+- calendar_list_events: Ver eventos en un rango de fechas
+- calendar_create_event: Crear evento (usar "primary" como calendar_id)
+- calendar_update_event: Actualizar evento existente
+- calendar_delete_event: Eliminar evento
+- drive_search: Buscar archivos en Drive
+- drive_list: Listar archivos de una carpeta
+- drive_create_folder: Crear carpeta nueva
+- drive_move_file: Mover archivo a otra carpeta
+- drive_share_file: Compartir archivo con alguien por email
+- drive_delete_file: Mover archivo a la papelera
+- contacts_list: Listar contactos de Google
+- sheets_read: Leer datos de Google Sheets
+- sheets_write: Escribir datos en Google Sheets
+- docs_read: Leer contenido de un Google Doc
+- create_google_doc: Crear un Google Doc nuevo
 
 **Web & Search:**
 - web_search: Search the internet for current information, news, real-time data
