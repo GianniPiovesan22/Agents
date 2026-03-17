@@ -40,15 +40,15 @@ registerTool({
         properties: {
           industry: {
             type: 'string',
-            description: 'Industria o rubro a buscar (ej: "empaques alimentarios", "industria frigorífica", "agroindustria")',
+            description: 'Industria o rubro a buscar (ej: "acopio de granos", "frigorífico", "apicultura")',
           },
           location: {
             type: 'string',
-            description: 'Zona geográfica (default: Argentina)',
+            description: 'Zona geográfica (ej: "Córdoba", "Buenos Aires", "Argentina")',
           },
           max_results: {
             type: 'number',
-            description: 'Cantidad máxima de leads a guardar (default: 10)',
+            description: 'Cantidad máxima de leads a guardar (default: 8)',
           },
         },
         required: ['industry'],
@@ -58,86 +58,85 @@ registerTool({
   execute: async (args) => {
     const industry: string = args.industry;
     const location: string = args.location ?? 'Argentina';
-    const maxResults: number = args.max_results ?? 10;
+    const maxResults: number = Math.min(args.max_results ?? 8, 15);
 
-    const allResults: Array<{ title: string; url: string; content: string }> = [];
+    // Step 1: Use Tavily to find company website URLs (not snippets)
+    const candidateUrls: Array<{ title: string; url: string }> = [];
 
     if (config.TAVILY_API_KEY) {
-      // Primary: Tavily
-      const queries = [
-        `"${industry}" empresas proveedores ${location} contacto email telefono`,
-        `"${industry}" distribuidores ${location} site:infonegocios.com OR site:guiaargentina.com.ar OR site:paginasamarillas.com.ar`,
-      ];
-
-      for (const q of queries) {
-        try {
-          const resp = await axios.post(
-            'https://api.tavily.com/search',
-            {
-              api_key: config.TAVILY_API_KEY,
-              query: q,
-              search_depth: 'basic',
-              max_results: Math.ceil(maxResults / 2),
-            },
-            { timeout: 15000 }
-          );
-          const results = resp.data?.results ?? [];
-          for (const r of results) {
-            allResults.push({ title: r.title ?? '', url: r.url ?? '', content: r.content ?? '' });
-          }
-        } catch (e: any) {
-          console.error('Tavily search error:', e.message);
-        }
-      }
-    } else {
-      // Fallback: Jina Reader on a Google search URL
-      const query = encodeURIComponent(`${industry} empresas ${location} contacto email`);
-      const jinaUrl = `https://r.jina.ai/https://www.google.com/search?q=${query}&num=20`;
+      const query = `empresas ${industry} ${location} sitio web contacto`;
       try {
-        const resp = await axios.get(jinaUrl, { timeout: 20000 });
-        const text: string = resp.data ?? '';
-        // Parse rough company entries from the markdown
-        const lines = text.split('\n').filter(l => l.trim().length > 0);
-        for (const line of lines.slice(0, maxResults * 3)) {
-          allResults.push({ title: line.substring(0, 80), url: '', content: line });
+        const resp = await axios.post(
+          'https://api.tavily.com/search',
+          {
+            api_key: config.TAVILY_API_KEY,
+            query,
+            search_depth: 'basic',
+            max_results: maxResults + 5,
+            include_domains: [],
+            exclude_domains: ['facebook.com', 'instagram.com', 'twitter.com', 'youtube.com', 'wikipedia.org', 'mercadolibre.com'],
+          },
+          { timeout: 15000 }
+        );
+        for (const r of resp.data?.results ?? []) {
+          if (r.url && r.title) {
+            candidateUrls.push({ title: r.title, url: r.url });
+          }
         }
       } catch (e: any) {
-        return `Error buscando leads: ${e.message}`;
+        console.error('Tavily error:', e.message);
       }
     }
 
-    if (allResults.length === 0) {
-      return `No encontré resultados para "${industry}" en ${location}.`;
+    if (candidateUrls.length === 0) {
+      return `No encontré empresas de "${industry}" en ${location}. Intentá con otro término de búsqueda.`;
     }
 
-    const seen = new Set<string>();
+    // Step 2: Scrape each company website with Jina Reader to extract real contact info
     let saved = 0;
+    const results: string[] = [];
 
-    for (const item of allResults) {
-      if (saved >= maxResults) break;
-      const companyName = item.title.trim();
-      if (!companyName || seen.has(companyName.toLowerCase())) continue;
-      seen.add(companyName.toLowerCase());
+    for (const candidate of candidateUrls.slice(0, maxResults)) {
+      try {
+        const jinaResp = await axios.get(`https://r.jina.ai/${candidate.url}`, {
+          timeout: 12000,
+          headers: { Accept: 'text/plain' },
+        });
+        const pageText: string = typeof jinaResp.data === 'string' ? jinaResp.data.slice(0, 8000) : '';
 
-      const combinedText = `${item.title} ${item.content}`;
-      const emails = extractEmails(combinedText);
-      const phones = extractPhones(combinedText);
+        const emails = extractEmails(pageText);
+        const phones = extractPhones(pageText);
 
-      saveLead({
-        company_name: companyName,
-        email: emails[0] ?? undefined,
-        phone: phones[0] ?? undefined,
-        website: item.url || undefined,
-        industry,
-        location,
-        source: 'web_search',
-        status: 'nuevo',
-      });
+        // Extract a clean company name from page title or candidate title
+        const titleMatch = pageText.match(/^#\s+(.+)$/m);
+        const companyName = titleMatch?.[1]?.trim().slice(0, 80) ?? candidate.title.slice(0, 80);
 
-      saved++;
+        const id = saveLead({
+          company_name: companyName,
+          email: emails[0] ?? undefined,
+          phone: phones[0] ?? undefined,
+          website: candidate.url,
+          industry,
+          location,
+          source: 'web_search',
+          status: 'nuevo',
+        });
+
+        if (id > 0) {
+          saved++;
+          const contact = [emails[0], phones[0]].filter(Boolean).join(' | ') || 'sin contacto extraído';
+          results.push(`✅ ${companyName} — ${contact}`);
+        }
+      } catch {
+        // Skip URLs that fail to scrape
+      }
     }
 
-    return `Encontré ${saved} leads para ${industry} en ${location}. Guardados en tu CRM.`;
+    if (saved === 0) {
+      return `Encontré empresas pero no pude extraer datos de contacto. Intentá con scrape_leads_from_url en alguna de estas URLs directamente.`;
+    }
+
+    return `Guardé ${saved} leads de "${industry}" en ${location}:\n\n${results.join('\n')}\n\nUsá "mostrame los leads" para ver el detalle completo.`;
   },
 });
 
