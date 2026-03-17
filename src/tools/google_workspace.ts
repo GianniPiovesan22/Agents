@@ -939,16 +939,20 @@ registerTool({
         type: 'function',
         function: {
             name: 'gmail_delete',
-            description: 'Move a Gmail message or thread to trash.',
+            description: 'Move a Gmail message or thread to trash. Provide either message_id or thread_id — both work.',
             parameters: {
                 type: 'object',
                 properties: {
                     message_id: {
                         type: 'string',
-                        description: 'The Gmail message ID to trash'
+                        description: 'The Gmail message ID to trash (use this OR thread_id)'
+                    },
+                    thread_id: {
+                        type: 'string',
+                        description: 'The Gmail thread ID to trash (use this OR message_id)'
                     }
                 },
-                required: ['message_id'],
+                required: [],
             },
         },
     },
@@ -956,11 +960,17 @@ registerTool({
         try {
             const auth = getGoogleAuth();
             const gmail = google.gmail({ version: 'v1', auth });
-            await gmail.users.messages.trash({ userId: 'me', id: args.message_id });
-            return `Mensaje ${args.message_id} movido a la papelera.`;
+            if (args.thread_id) {
+                await gmail.users.threads.trash({ userId: 'me', id: args.thread_id });
+                return `Hilo ${args.thread_id} movido a la papelera.`;
+            } else if (args.message_id) {
+                await gmail.users.messages.trash({ userId: 'me', id: args.message_id });
+                return `Mensaje ${args.message_id} movido a la papelera.`;
+            }
+            return 'Error: proporcioná message_id o thread_id.';
         } catch (error: any) {
             if (isNotConfigured(error)) return NOT_CONFIGURED;
-            return `Error eliminando mensaje: ${error.message}`;
+            return `Error eliminando: ${error.message}`;
         }
     },
 });
