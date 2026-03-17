@@ -186,8 +186,26 @@ FORMATTING (CRITICAL):
 
     messages = messages.concat(history);
 
+    // Detect trivial messages — use Haiku without tools for simple conversation
+    const lastUserText = (history[history.length - 1]?.content ?? '').toLowerCase().trim();
+    const SIMPLE_THRESHOLD = 80;
+    const COMPLEX_KEYWORDS = [
+        'redactá','redacta','escribí','escribi','propuesta','presupuesto',
+        'analizá','analiza','análisis','analisis','investigá','investiga',
+        'buscá','busca','leads','email','correo','gmail','calendar',
+        'drive','sheets','documento','imagen','generá','genera',
+        'instagram','contenido','digest','resumen','informe','reporte',
+        'estrategia','plan','comparar','explica','explicá','detallá',
+        'precio','dólar','dolar','crypto','tiempo','clima','recordatorio',
+        'agenda','evento','nota','stock','acción','accion','granos','soja',
+    ];
+    const isTrivial = lastUserText.length < SIMPLE_THRESHOLD
+        && !COMPLEX_KEYWORDS.some(kw => lastUserText.includes(kw));
+
     for (let i = 0; i < MAX_ITERATIONS; i++) {
-        const response: CompletionResult = await getCompletion(messages, getToolsDefinitions());
+        // First iteration: no tools for trivial messages (Haiku handles it cheaper)
+        const tools = (i === 0 && isTrivial) ? [] : getToolsDefinitions();
+        const response: CompletionResult = await getCompletion(messages, tools);
 
         if (!response) return "Tuve un error procesando tu mensaje.";
 
