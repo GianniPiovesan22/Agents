@@ -55,7 +55,7 @@ async function handleResponse(
     forceVoice: boolean = false,
     images?: { mimeType: string, data: string }[]
 ) {
-    const shouldVoice = forceVoice || /audio|habla|escucha|voz|decime|dime/i.test(userInput);
+    const shouldVoice = forceVoice || /audio|habla|escucha|voz|decime/i.test(userInput);
 
     // Show appropriate action
     await ctx.replyWithChatAction(shouldVoice ? 'upload_voice' : 'typing');
