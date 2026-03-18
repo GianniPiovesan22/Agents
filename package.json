@@ -30,6 +30,7 @@
     "grammy": "^1.41.1",
     "groq-sdk": "^0.37.0",
     "node-cron": "^4.2.1",
+    "ollama": "^0.6.3",
     "openai": "^6.27.0",
     "p-retry": "^7.1.1",
     "pdf-parse": "^2.4.5",

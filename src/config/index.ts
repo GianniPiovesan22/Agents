@@ -37,6 +37,11 @@ const configSchema = z.object({
     MEMORY_MAX_EMBEDDINGS: z.string().default('500').transform(Number),
     // LLM routing: 'groq' (default, cost-optimized) | 'anthropic' (legacy, quality-first)
     PRIMARY_PROVIDER: z.enum(['groq', 'anthropic', 'gemini']).default('groq'),
+    // Ollama Local Configuration
+    OLLAMA_ENABLED: z.string().default('false').transform(val => val === 'true'),
+    OLLAMA_HOST: z.string().default('http://localhost:11434'),
+    OLLAMA_MODEL: z.string().default('llama3.2:7b'),
+    OLLAMA_TIMEOUT_MS: z.string().default('30000').transform(Number),
 });
 
 const parsedConfig = configSchema.safeParse(process.env);
