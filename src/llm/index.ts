@@ -35,18 +35,24 @@ const SONNET_KEYWORDS = [
 ];
 
 function selectAnthropicModel(messages: Message[], tools?: Tool[]): string {
-    const lastUser = [...messages].reverse().find(m => m.role === 'user');
-    if (!lastUser) return ANTHROPIC_HAIKU;
+    // Always Sonnet if tools are available (agent loop with capabilities)
+    if (tools && tools.length > 0) return ANTHROPIC_SONNET;
 
-    // Always Sonnet for images or documents (vision tasks)
+    const lastUser = [...messages].reverse().find(m => m.role === 'user');
+    if (!lastUser) return ANTHROPIC_SONNET;
+
+    // Always Sonnet for images or documents
     if (lastUser.images?.length || lastUser.documents?.length) return ANTHROPIC_SONNET;
 
     const text = typeof lastUser.content === 'string' ? lastUser.content.toLowerCase() : '';
 
-    // Sonnet only for genuinely complex/long tasks
-    if (text.length > 400 && SONNET_KEYWORDS.some(kw => text.includes(kw))) return ANTHROPIC_SONNET;
+    // Always Sonnet for long messages
+    if (text.length > 150) return ANTHROPIC_SONNET;
 
-    // Haiku for everything else (tool calls included — Anthropic is now a fallback, not primary)
+    // Always Sonnet if complex keywords detected
+    if (SONNET_KEYWORDS.some(kw => text.includes(kw))) return ANTHROPIC_SONNET;
+
+    // Everything else → Haiku (greetings, quick questions, simple lookups)
     return ANTHROPIC_HAIKU;
 }
 
@@ -204,8 +210,7 @@ async function anthropicCompletion(messages: Message[], tools?: Tool[]): Promise
     if (!anthropicClient) throw new Error('Anthropic not configured');
 
     const model = selectAnthropicModel(messages, tools);
-    const inputTokens = messages.reduce((acc, m) => acc + (typeof m.content === 'string' ? m.content.length / 4 : 0), 0);
-    console.log(`🧠 Provider: Anthropic (${model}) | ${COST_TIER[model] || '?'} | ~${Math.round(inputTokens)} tokens`);
+    console.log(`🧠 Provider: Anthropic (${model})`);
 
     const { system, messages: anthropicMessages } = convertMessagesForAnthropic(messages);
 
@@ -327,8 +332,7 @@ async function geminiCompletion(messages: Message[], tools?: Tool[]): Promise<Co
 
     const tier = classifyComplexity(messages);
     const model = GEMINI_MODELS[tier];
-    const inputTokens = messages.reduce((acc, m) => acc + (typeof m.content === 'string' ? m.content.length / 4 : 0), 0);
-    console.log(`🧠 Provider: Gemini (${model}, tier: ${tier}) | ${COST_TIER[model] || '?'} | ~${Math.round(inputTokens)} tokens`);
+    console.log(`🧠 Provider: Gemini (${model}, tier: ${tier})`);
 
     const { systemInstruction, contents } = convertMessagesForGemini(messages);
 
@@ -360,8 +364,7 @@ async function geminiCompletion(messages: Message[], tools?: Tool[]): Promise<Co
 
 // ── Groq Completion (Fallback 2) ───────────────────────────────
 async function groqCompletion(messages: Message[], tools?: Tool[]): Promise<CompletionResult> {
-    const inputTokens = messages.reduce((acc, m) => acc + (typeof m.content === 'string' ? m.content.length / 4 : 0), 0);
-    console.log(`🧠 Provider: Groq (${GROQ_MODEL}) | ${COST_TIER[GROQ_MODEL] || '?'} | ~${Math.round(inputTokens)} tokens`);
+    console.log(`🧠 Provider: Groq (${GROQ_MODEL})`);
 
     const cleanMessages = messages.map(m => {
         const { images, tool_calls, ...rest } = m;
@@ -434,49 +437,35 @@ async function openRouterCompletion(messages: Message[], tools?: Tool[]): Promis
     return { content: msg.content || null, tool_calls: toolCalls };
 }
 
-// ── Cost Tiers (for logging) ────────────────────────────────────
-const COST_TIER: Record<string, string> = {
-    'llama-3.3-70b-versatile': '🟢 free',
-    'gemini-2.5-flash':        '🟢 ~$0',
-    'gemini-2.5-pro':          '🟡 cheap',
-    'claude-haiku-4-5-20251001': '🟡 cheap',
-    'claude-sonnet-4-5':       '🔴 expensive',
-};
-
 // ── Main Completion ────────────────────────────────────────────
 export async function getCompletion(messages: Message[], tools?: Tool[]): Promise<CompletionResult> {
-    const primary = config.PRIMARY_PROVIDER || 'groq';
-
     const result = await pRetry(async () => {
-        if (primary === 'anthropic') {
-            // Legacy mode: Anthropic first (quality-first, higher cost)
-            if (anthropicClient) {
-                try { return await anthropicCompletion(messages, tools); }
-                catch (e: any) { console.error('⚠️ Anthropic error, falling back to Gemini:', e?.message); }
-            }
-            if (geminiClient) {
-                try { return await geminiCompletion(messages, tools); }
-                catch (e: any) { console.error('⚠️ Gemini error, falling back to Groq:', e?.message); }
-            }
-            try { return await groqCompletion(messages, tools); }
-            catch (e: any) { console.error('⚠️ Groq error, falling back to OpenRouter:', e?.message); }
-        } else {
-            // Default: cost-optimized chain — Groq → Gemini → Anthropic
-            try { return await groqCompletion(messages, tools); }
-            catch (e: any) { console.error('⚠️ Groq error, falling back to Gemini:', e?.message); }
-
-            if (geminiClient) {
-                try { return await geminiCompletion(messages, tools); }
-                catch (e: any) { console.error('⚠️ Gemini error, falling back to Anthropic:', e?.message); }
-            }
-
-            if (anthropicClient) {
-                try { return await anthropicCompletion(messages, tools); }
-                catch (e: any) { console.error('⚠️ Anthropic error, falling back to OpenRouter:', e?.message); }
+        // PRIMARY: Anthropic Claude
+        if (anthropicClient) {
+            try {
+                return await anthropicCompletion(messages, tools);
+            } catch (error: any) {
+                console.error('⚠️ Anthropic error, falling back to Gemini:', error?.message || error);
             }
         }
 
-        // Last resort: OpenRouter
+        // FALLBACK 1: Gemini
+        if (geminiClient) {
+            try {
+                return await geminiCompletion(messages, tools);
+            } catch (error: any) {
+                console.error('⚠️ Gemini error, falling back to Groq:', error?.message || error);
+            }
+        }
+
+        // FALLBACK 2: Groq
+        try {
+            return await groqCompletion(messages, tools);
+        } catch (error: any) {
+            console.error('⚠️ Groq error, falling back to OpenRouter:', error?.message || error);
+        }
+
+        // FALLBACK 3: OpenRouter
         try {
             return await openRouterCompletion(messages, tools);
         } catch (lastError) {
