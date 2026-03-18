@@ -35,6 +35,8 @@ const configSchema = z.object({
     WHATSAPP_APP_SECRET: z.string().optional(),
     WHATSAPP_ALLOWED_NUMBERS: z.string().optional().transform(val => val ? val.split(',').map(s => s.trim()) : []),
     MEMORY_MAX_EMBEDDINGS: z.string().default('500').transform(Number),
+    // LLM routing: 'groq' (default, cost-optimized) | 'anthropic' (legacy, quality-first)
+    PRIMARY_PROVIDER: z.enum(['groq', 'anthropic', 'gemini']).default('groq'),
 });
 
 const parsedConfig = configSchema.safeParse(process.env);
