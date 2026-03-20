@@ -61,13 +61,25 @@ async function classifyIntent(messages: Message[]): Promise<TaskIntent> {
 
     const userText = typeof lastUser.content === 'string' ? lastUser.content : '';
 
+    // If last message is too short (follow-up like "silo bolsa", "dale", "sí"),
+    // look at recent conversation context to infer intent
+    const recentContext = messages
+        .filter(m => m.role === 'user' || m.role === 'assistant')
+        .slice(-6)
+        .map(m => `${m.role}: ${typeof m.content === 'string' ? m.content : ''}`)
+        .join('\n');
+
+    const contextForClassification = userText.split(/\s+/).length < 5
+        ? recentContext
+        : userText;
+
     try {
         const response = await anthropicClient.messages.create({
             model: ANTHROPIC_HAIKU,
             max_tokens: 10,
             messages: [{
                 role: 'user',
-                content: `Classify this user message into exactly one category: operational, creative, or search.\nReturn only the category word, nothing else.\n\nMessage: "${userText}"`,
+                content: `Classify the user's LATEST intent into exactly one category: operational, creative, or search.\nReturn only the category word, nothing else.\n\nConversation:\n${contextForClassification}`,
             }],
         });
 
