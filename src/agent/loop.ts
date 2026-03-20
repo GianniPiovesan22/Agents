@@ -8,7 +8,6 @@ import '../tools/image_gen.js';
 import '../tools/weather.js';
 import '../tools/notes.js';
 import '../tools/markets.js';
-import '../tools/social_content.js';
 import '../tools/reminder.js';
 import '../tools/web_scrape.js';
 import '../tools/youtube.js';
@@ -109,9 +108,6 @@ You have access to the following tools to help the user:
 - get_stock_price: Get real-time stock prices, market indices (S&P 500, Nasdaq, Merval), ETFs, forex pairs, and commodities using Yahoo Finance
 - get_grain_prices: Precios actuales de soja, maíz, trigo y girasol desde la BCR de Rosario
 
-**Social Content:**
-- get_social_content_guide: Get the Social Content strategy guide, templates, and hook formulas for social media
-
 **CRM & Leads:**
 - search_leads_online: Buscar empresas/leads online por industria y zona, guardarlos en el CRM
 - scrape_leads_from_url: Extraer contactos de una URL específica y guardarlos en el CRM
@@ -121,8 +117,6 @@ You have access to the following tools to help the user:
 - get_stale_leads: Ver leads sin actividad en N días que necesitan seguimiento (default: 7 días)
 
 **Contenido para redes:**
-- generate_instagram_post: Generar caption e imagen para Instagram de BrescoPack
-- generate_content_calendar: Generar calendario de contenido semanal para redes
 - generate_social_content: Generar contenido completo (copy + prompt de imagen + hashtags + horario) para Facebook e/o Instagram de BrescoPack. Usá este tool cuando el usuario pida contenido para redes, un post, o cuando llegue el cron de sugerencia semanal.
 
 **User Memory:**
