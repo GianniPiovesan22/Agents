@@ -12,7 +12,7 @@ const openRouter = new OpenAI({
     apiKey: config.OPENROUTER_API_KEY,
 });
 
-const geminiClient = config.GEMINI_API_KEY
+export const geminiClient = config.GEMINI_API_KEY
     ? new GoogleGenAI({ apiKey: config.GEMINI_API_KEY })
     : null;
 
