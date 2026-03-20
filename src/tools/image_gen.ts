@@ -28,33 +28,32 @@ registerTool({
         },
     },
     execute: async (args) => {
-        // ── Primary: Imagen (3 first, then 4) ─────────────────
+        // ── Primary: Gemini 2.0 Flash image generation ────────
         if (geminiClient) {
-            const IMAGEN_MODELS = ['imagen-3.0-generate-002', 'imagen-4.0-generate-001'];
-            for (const model of IMAGEN_MODELS) {
-                try {
-                    console.log(`🖼️ Generating image via ${model}...`);
-                    const response = await geminiClient.models.generateImages({
-                        model,
-                        prompt: args.prompt,
-                        config: { numberOfImages: 1 },
-                    });
+            try {
+                console.log(`🖼️ Generating image via Gemini 2.0 Flash...`);
+                const response = await geminiClient.models.generateContent({
+                    model: 'gemini-2.0-flash-preview-image-generation',
+                    contents: args.prompt,
+                    config: {
+                        responseModalities: ['IMAGE', 'TEXT'],
+                    },
+                });
 
-                    const imageBytes = response.generatedImages?.[0]?.image?.imageBytes
-                                    || response.generatedImages?.[0]?.image?.bytesBase64Encoded;
-                    if (!imageBytes) continue;
+                const imagePart = response.candidates?.[0]?.content?.parts
+                    ?.find((p: any) => p.inlineData?.mimeType?.startsWith('image/'));
 
-                    const buffer = Buffer.from(imageBytes, 'base64');
+                if (imagePart?.inlineData?.data) {
+                    const buffer = Buffer.from(imagePart.inlineData.data, 'base64');
                     const tempPath = path.join(os.tmpdir(), `img_${Date.now()}.jpg`);
                     fs.writeFileSync(tempPath, buffer);
-                    console.log(`🖼️ Image generated via ${model}`);
+                    console.log(`🖼️ Image generated via Gemini 2.0 Flash`);
                     return `[IMG:${tempPath}]`;
-                } catch (e: any) {
-                    console.error(`⚠️ ${model} failed: ${e?.message}`);
-                    // continue to next model
                 }
+            } catch (e: any) {
+                console.error(`⚠️ Gemini 2.0 Flash image generation failed: ${e?.message}`);
             }
-            console.warn('⚠️ All Imagen models failed, falling back to Pollinations...');
+            console.warn('⚠️ Gemini image generation failed, falling back to Pollinations...');
         }
 
         // ── Fallback: Pollinations.ai ──────────────────────────
@@ -79,4 +78,4 @@ registerTool({
     },
 });
 
-console.log('🖼️ Image Generation tool registered (Imagen 4 / Pollinations.ai fallback)');
+console.log('🖼️ Image Generation tool registered (Gemini 2.0 Flash / Pollinations.ai fallback)');
