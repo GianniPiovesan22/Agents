@@ -643,11 +643,14 @@ export async function transcribeAudio(filePath: string) {
     return response.text;
 }
 
+// Once a 404 is received, stop trying embeddings for the rest of the session
+let embeddingsAvailable = true;
+
 /**
  * Generates an embedding vector for a given text using Gemini.
  */
 export async function getEmbedding(text: string): Promise<number[]> {
-    if (!geminiClient) throw new Error('Gemini not configured for embeddings');
+    if (!geminiClient || !embeddingsAvailable) return [];
 
     try {
         const result = await geminiClient.models.embedContent({
@@ -658,7 +661,8 @@ export async function getEmbedding(text: string): Promise<number[]> {
         return result.embeddings?.[0]?.values || [];
     } catch (error: any) {
         if (error.status === 404 || error.message?.includes('404')) {
-            console.error("⚠️ Embeddings API returned 404 (Ignored). Note: Some Gemini keys don't support text-embedding models.");
+            embeddingsAvailable = false;
+            console.warn("⚠️ Embeddings not available for this Gemini key — disabling for this session.");
         } else {
             console.error("⚠️ Error generating embedding:", error.message || error);
         }
