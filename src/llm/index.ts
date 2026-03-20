@@ -4,7 +4,6 @@ import { config } from '../config/index.js';
 import OpenAI from 'openai';
 import Anthropic from '@anthropic-ai/sdk';
 import pRetry, { AbortError } from 'p-retry';
-import ollama from 'ollama';
 
 // ── Providers ──────────────────────────────────────────────────
 const groq = new Groq({ apiKey: config.GROQ_API_KEY });
@@ -59,13 +58,6 @@ const GEMINI_MODELS = {
 } as const;
 
 const GROQ_MODEL = 'llama-3.3-70b-versatile';
-
-// ── Ollama Local Models ─────────────────────────────────────────
-const OLLAMA_MODELS = {
-    fast: 'phi3.5:mini',       // < 3GB VRAM, muy rápido
-    pro: 'llama3.2:7b',        // ~4.5GB VRAM, balanceado
-    ultra: 'qwen2.5:7b-coder', // ~5GB VRAM, mejor para código
-} as const;
 
 // ── Smart Model Router (for Gemini fallback) ───────────────────
 const COMPLEX_KEYWORDS = [
@@ -447,12 +439,6 @@ export async function getCompletion(messages: Message[], tools?: Tool[]): Promis
     const primary = config.PRIMARY_PROVIDER || 'groq';
 
     const result = await pRetry(async () => {
-        // Ollama first if enabled (local, no cost)
-        if (config.OLLAMA_ENABLED) {
-            try { return await ollamaCompletion(messages, tools); }
-            catch (e: any) { console.error('⚠️ Ollama error, falling back to cloud:', e?.message); }
-        }
-
         if (primary === 'anthropic') {
             // Legacy mode: Anthropic first (quality-first, higher cost)
             if (anthropicClient) {
@@ -550,50 +536,6 @@ export async function getEmbedding(text: string): Promise<number[]> {
             console.error("⚠️ Error generating embedding:", error.message || error);
         }
         return [];
-    }
-}
-
-// ── Ollama Completion ───────────────────────────────────────────
-async function ollamaCompletion(messages: Message[], tools?: Tool[], modelOverride?: string): Promise<CompletionResult> {
-    if (!config.OLLAMA_ENABLED) throw new Error('Ollama not enabled');
-
-    const tier = classifyComplexity(messages);
-    const model = modelOverride || OLLAMA_MODELS[tier];
-    console.log(`🧠 Ollama Model: ${model} (tier: ${tier})`);
-
-    // Convert messages to Ollama format
-    const ollamaMessages = messages
-        .filter(m => m.role !== 'system')
-        .map(m => ({
-            role: m.role === 'model' ? 'assistant' : m.role,
-            content: m.content,
-        }));
-
-    // Build prompt
-    const systemPrompt = messages
-        .filter(m => m.role === 'system')
-        .map(m => m.content)
-        .join('\n\n');
-
-    const fullPrompt = systemPrompt 
-        ? `System: ${systemPrompt}\n\n${ollamaMessages.map(m => `${m.role}: ${m.content}`).join('\n\n')}`
-        : ollamaMessages.map(m => `${m.role}: ${m.content}`).join('\n\n');
-
-    try {
-        const response = await ollama.generate({
-            model,
-            prompt: fullPrompt,
-            stream: false,
-            options: {
-                num_ctx: 8192, // 8K context
-                temperature: 0.7,
-            },
-        });
-
-        return { content: response.response, tool_calls: [] };
-    } catch (error: any) {
-        console.error('⚠️ Ollama error:', error?.message || error);
-        throw error;
     }
 }
 
