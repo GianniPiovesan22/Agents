@@ -45,6 +45,17 @@ CONTEXTO DEL USUARIO:
 - Clientes objetivo: productores agropecuarios, acopios, cooperativas, frigoríficos
 - Usás este asistente para: redactar propuestas, seguimiento de leads, contenido para redes sociales, análisis de mercado, gestión administrativa
 
+EXPERTISE EN MARKETING — BRESCOPACK:
+Cuando el usuario pida contenido para redes o cuando generes sugerencias proactivas, aplicá este conocimiento:
+📌 Producto estrella: selladora de silobolsa — es lo que más vende y lo que mejor funciona en ads
+📌 Otros productos: desactivadoras de soja (consumo animal), selladoras alimenticias
+📌 Audiencia: productores agropecuarios, acopiadores, contratistas, cooperativas en Argentina
+📌 Tono de marca: profesional pero del campo, técnico y confiable, español rioplatense, cercano
+📌 Pilares de contenido: showcase de producto, testimonios de campo, info de mercado agro (precios, dólar), tips estacionales (cosecha = urgencia), educativo
+📌 Lo que funciona: imágenes simples de la selladora en acción, copy con pain point (perder la cosecha por mal sellado), diferencial = fabricación nacional + servicio técnico
+📌 Temporadas clave: cosecha gruesa mar-may (soja/maíz), siembra gruesa oct-dic
+📌 Para sugerencias semanales proactivas usá siempre generate_social_content y generate_image
+
 You have access to the following tools to help the user:
 
 **Google Workspace:**
@@ -112,6 +123,7 @@ You have access to the following tools to help the user:
 **Contenido para redes:**
 - generate_instagram_post: Generar caption e imagen para Instagram de BrescoPack
 - generate_content_calendar: Generar calendario de contenido semanal para redes
+- generate_social_content: Generar contenido completo (copy + prompt de imagen + hashtags + horario) para Facebook e/o Instagram de BrescoPack. Usá este tool cuando el usuario pida contenido para redes, un post, o cuando llegue el cron de sugerencia semanal.
 
 **User Memory:**
 - remember_about_user: Save facts or preferences about the user for future conversations
@@ -148,7 +160,8 @@ FORMATTING (CRITICAL):
     // Build Long Term Semantic Memory
     try {
         const userPrompt = history[history.length - 1]?.content || '';
-        if (userPrompt) {
+        const promptWordCount = userPrompt.trim().split(/\s+/).length;
+        if (userPrompt && promptWordCount >= 50) {
             const promptEmbedding = await getEmbedding(userPrompt);
             if (promptEmbedding.length > 0) {
                 const pastEmbeddings = await getAllEmbeddings(userId);
@@ -274,9 +287,12 @@ FORMATTING (CRITICAL):
         const lastQuery = history[history.length - 1]?.content || '';
         if (lastQuery && finalContent && !lastQuery.startsWith('/')) { // Ignore commands
             const memoryText = `User asked: ${lastQuery}\nBot answered: ${finalContent}`;
-            const memoryEmb = await getEmbedding(memoryText);
-            if (memoryEmb.length > 0) {
-                await saveEmbedding(userId, memoryText, memoryEmb);
+            const memoryWordCount = memoryText.trim().split(/\s+/).length;
+            if (memoryWordCount >= 50) {
+                const memoryEmb = await getEmbedding(memoryText);
+                if (memoryEmb.length > 0) {
+                    await saveEmbedding(userId, memoryText, memoryEmb);
+                }
             }
         }
     } catch (e) {

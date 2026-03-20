@@ -1,8 +1,9 @@
 import { Bot } from 'grammy';
 import { config } from '../config/index.js';
-import { getHistory, saveMessage } from '../database/index.js';
+import { getHistory, saveMessage, getPendingContent } from '../database/index.js';
 import { runAgent } from '../agent/loop.js';
 import { transcribeAudio, textToSpeech, getCompletion, Message } from '../llm/index.js';
+import { executeTool } from '../tools/index.js';
 import path from 'path';
 import fs from 'fs';
 import os from 'os';
@@ -324,6 +325,131 @@ bot.on('message:document', async (ctx) => {
         await ctx.reply("Hubo un problema procesando tu documento. Intentá de nuevo.");
     } finally {
         if (tempFile && fs.existsSync(tempFile)) fs.unlinkSync(tempFile);
+    }
+});
+
+// /contenido command — on-demand social content generation
+bot.command('contenido', async (ctx) => {
+    const userId = ctx.from.id.toString();
+    if (!config.TELEGRAM_ALLOWED_USER_IDS.includes(userId)) return;
+
+    const CONTENT_TYPE_ALIASES: Record<string, string> = {
+        producto: 'product',
+        product: 'product',
+        testimonio: 'testimonial',
+        testimonial: 'testimonial',
+        mercado: 'market_info',
+        market: 'market_info',
+        market_info: 'market_info',
+        estacional: 'seasonal',
+        seasonal: 'seasonal',
+        educativo: 'educational',
+        educational: 'educational',
+    };
+
+    const CONTENT_TYPE_LABELS: Record<string, string> = {
+        product: 'Showcase de producto',
+        testimonial: 'Testimonio de cliente',
+        market_info: 'Info del mercado agro',
+        seasonal: 'Contenido estacional',
+        educational: 'Educativo / tip',
+    };
+
+    const args = ctx.match?.trim().toLowerCase() ?? '';
+    const contentType = CONTENT_TYPE_ALIASES[args] ?? 'product';
+    const label = CONTENT_TYPE_LABELS[contentType];
+
+    await ctx.reply(`📱 Generando contenido (${label})... un momento.`);
+    await ctx.replyWithChatAction('typing');
+
+    try {
+        const contentResult = await executeTool('generate_social_content', {
+            platform: 'both',
+            content_type: contentType,
+        });
+
+        let copy = '';
+        let hashtags = '';
+        let bestTime = 'Martes o Miércoles 9-11hs';
+        let platformNotes = '';
+        let imagePrompt = 'Professional Argentine agricultural machinery, silo bag sealer in field, golden pampas landscape, photorealistic';
+
+        try {
+            const parsed = JSON.parse(contentResult);
+            copy = parsed.copy ?? contentResult;
+            hashtags = Array.isArray(parsed.hashtags)
+                ? parsed.hashtags.map((h: string) => `#${h.replace(/^#/, '')}`).join(' ')
+                : '';
+            bestTime = parsed.best_time ?? bestTime;
+            platformNotes = parsed.platform_notes ?? '';
+            imagePrompt = parsed.image_prompt ?? imagePrompt;
+        } catch {
+            copy = contentResult;
+        }
+
+        // Generate image
+        let imgPath: string | null = null;
+        try {
+            await ctx.replyWithChatAction('upload_photo');
+            const imageResult = await executeTool('generate_image', { prompt: imagePrompt });
+            const imgMatch = imageResult.match(/\[IMG:(.+?)\]/);
+            if (imgMatch) imgPath = imgMatch[1];
+        } catch (imgErr: any) {
+            console.error('📱 /contenido: Error generando imagen:', imgErr.message);
+        }
+
+        const notesLine = platformNotes ? `\n💡 Nota: ${platformNotes}` : '';
+        const message = `📱 Contenido sugerido — ${label}\n\n📝 Copy:\n${copy}\n\n🏷️ Hashtags:\n${hashtags}\n\n🕐 Mejor horario: ${bestTime}${notesLine}\n\nRespondé:\n✅ "publicar" — lo guardamos listo\n✏️ "ajustá [lo que quieras cambiar]" — lo refinamos\n🔄 "nuevo" — generamos otro`;
+
+        if (imgPath) {
+            try {
+                const { InputFile } = await import('grammy');
+                await ctx.replyWithPhoto(new InputFile(imgPath), { caption: message });
+            } finally {
+                if (fs.existsSync(imgPath)) fs.unlinkSync(imgPath);
+            }
+        } else {
+            await ctx.reply(message);
+        }
+    } catch (e: any) {
+        console.error('/contenido command error:', e.message);
+        await ctx.reply(`⚠️ Error generando el contenido: ${e.message}`);
+    }
+});
+
+// /historial command — show recent content history
+bot.command('historial', async (ctx) => {
+    const userId = ctx.from.id.toString();
+    if (!config.TELEGRAM_ALLOWED_USER_IDS.includes(userId)) return;
+
+    try {
+        const rows = getPendingContent().slice(0, 5);
+
+        if (rows.length === 0) {
+            await ctx.reply('📋 No hay historial de contenido todavía.');
+            return;
+        }
+
+        const STATUS_EMOJI: Record<string, string> = {
+            pending: '⏳ pendiente',
+            approved: '✅ aprobado',
+            rejected: '❌ rechazado',
+        };
+
+        const MONTH_NAMES = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
+
+        const lines = rows.map((row, i) => {
+            const d = new Date(row.created_at);
+            const dateStr = `${d.getDate()} ${MONTH_NAMES[d.getMonth()]}`;
+            const statusLabel = STATUS_EMOJI[row.status] ?? row.status;
+            return `${i + 1}. [${row.content_type}] — ${dateStr} — ${statusLabel}`;
+        });
+
+        const message = `📋 *Historial de contenido*\n\n${lines.join('\n')}`;
+        await ctx.reply(message, { parse_mode: 'Markdown' });
+    } catch (e: any) {
+        console.error('/historial command error:', e.message);
+        await ctx.reply(`⚠️ Error obteniendo el historial: ${e.message}`);
     }
 });
 

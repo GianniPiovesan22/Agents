@@ -5,6 +5,22 @@ import axios from 'axios';
 // MARKET QUOTES — Dólar Argentina + Crypto
 // ═══════════════════════════════════════════════════════════════
 
+// In-memory cache: key → { data, expiresAt }
+const cache = new Map<string, { data: any; expiresAt: number }>();
+
+const DOLLAR_TTL_MS = 5 * 60 * 1000;   // 5 minutes for dollar rates
+const MARKET_TTL_MS = 10 * 60 * 1000;  // 10 minutes for crypto and grains
+
+function getCached(key: string): any | null {
+    const entry = cache.get(key);
+    if (entry && Date.now() < entry.expiresAt) return entry.data;
+    return null;
+}
+
+function setCached(key: string, data: any, ttlMs: number): void {
+    cache.set(key, { data, expiresAt: Date.now() + ttlMs });
+}
+
 // ── Argentine Dollar Quotes ────────────────────────────────────
 registerTool({
     definition: {
@@ -21,6 +37,9 @@ registerTool({
     },
     execute: async () => {
         try {
+            const cached = getCached('dollar_rates');
+            if (cached) return cached;
+
             const response = await axios.get('https://dolarapi.com/v1/dolares', { timeout: 10000 });
             const rates = response.data;
 
@@ -37,6 +56,7 @@ registerTool({
             }
 
             result += `\n🕐 Actualizado: ${new Date().toLocaleString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires' })}`;
+            setCached('dollar_rates', result, DOLLAR_TTL_MS);
             return result;
         } catch (error: any) {
             return `Error obteniendo cotización del dólar: ${error.message}`;
@@ -66,6 +86,10 @@ registerTool({
     execute: async (args) => {
         try {
             const coins = args.coins || 'bitcoin,ethereum,solana';
+            const cacheKey = `crypto_prices:${coins}`;
+            const cached = getCached(cacheKey);
+            if (cached) return cached;
+
             const response = await axios.get('https://api.coingecko.com/api/v3/simple/price', {
                 params: {
                     ids: coins,
@@ -100,6 +124,7 @@ registerTool({
             }
 
             result += `\n🕐 Actualizado: ${new Date().toLocaleString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires' })}`;
+            setCached(cacheKey, result, MARKET_TTL_MS);
             return result;
         } catch (error: any) {
             return `Error obteniendo precios crypto: ${error.message}`;
@@ -154,17 +179,26 @@ registerTool({
         let markdown = '';
         let sourceName = 'BCR Rosario';
 
-        for (let i = 0; i < sources.length; i++) {
-            try {
-                const res = await axios.get(sources[i], {
-                    headers: { 'Accept': 'text/plain' },
-                    timeout: 20000,
-                });
-                markdown = typeof res.data === 'string' ? res.data : JSON.stringify(res.data);
-                sourceName = i === 0 ? 'BCR Rosario' : 'Agrofy';
-                if (markdown.length > 5) break;
-            } catch (_) {
-                // try next source
+        const grainCacheEntry = getCached('grain_raw');
+        if (grainCacheEntry) {
+            markdown = grainCacheEntry.markdown;
+            sourceName = grainCacheEntry.sourceName;
+        } else {
+            for (let i = 0; i < sources.length; i++) {
+                try {
+                    const res = await axios.get(sources[i], {
+                        headers: { 'Accept': 'text/plain' },
+                        timeout: 20000,
+                    });
+                    markdown = typeof res.data === 'string' ? res.data : JSON.stringify(res.data);
+                    sourceName = i === 0 ? 'BCR Rosario' : 'Agrofy';
+                    if (markdown.length > 5) break;
+                } catch (_) {
+                    // try next source
+                }
+            }
+            if (markdown.length > 5) {
+                setCached('grain_raw', { markdown, sourceName }, MARKET_TTL_MS);
             }
         }
 

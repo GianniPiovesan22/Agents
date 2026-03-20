@@ -72,6 +72,18 @@ localDb.exec(`
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
   );
+  CREATE TABLE IF NOT EXISTS content_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    platform TEXT NOT NULL,
+    content_type TEXT NOT NULL,
+    topic TEXT,
+    copy TEXT NOT NULL,
+    image_prompt TEXT,
+    hashtags TEXT,
+    status TEXT NOT NULL DEFAULT 'pending',
+    created_at INTEGER NOT NULL,
+    approved_at INTEGER
+  );
 `);
 
 // Migrate existing reminders table — add recurrence columns if missing
@@ -623,6 +635,88 @@ export function deleteLead(id: number): void {
     }
   } catch (e) {
     console.error("deleteLead error:", e);
+  }
+}
+
+// ── content_history helpers ──────────────────────────────────────
+
+export interface ContentHistoryRow {
+  id: number;
+  platform: string;
+  content_type: string;
+  topic?: string;
+  copy: string;
+  image_prompt?: string;
+  hashtags?: string;
+  status: string;
+  created_at: number;
+  approved_at?: number;
+}
+
+export function saveContentHistory(entry: {
+  platform: string;
+  content_type: string;
+  topic?: string;
+  copy: string;
+  image_prompt?: string;
+  hashtags?: string;
+  status?: string;
+}): number {
+  try {
+    const stmt = localDb.prepare(`
+      INSERT INTO content_history (platform, content_type, topic, copy, image_prompt, hashtags, status, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    const result = stmt.run(
+      entry.platform,
+      entry.content_type,
+      entry.topic ?? null,
+      entry.copy,
+      entry.image_prompt ?? null,
+      entry.hashtags ?? null,
+      entry.status ?? 'pending',
+      Date.now()
+    );
+    return result.lastInsertRowid as number;
+  } catch (e) {
+    console.error('saveContentHistory error:', e);
+    return -1;
+  }
+}
+
+export function getRecentContentTypes(days: number): string[] {
+  try {
+    const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
+    const stmt = localDb.prepare(
+      'SELECT content_type FROM content_history WHERE created_at >= ? ORDER BY created_at DESC'
+    );
+    const rows = stmt.all(cutoff) as { content_type: string }[];
+    return rows.map(r => r.content_type);
+  } catch (e) {
+    console.error('getRecentContentTypes error:', e);
+    return [];
+  }
+}
+
+export function updateContentStatus(id: number, status: 'approved' | 'rejected'): void {
+  try {
+    const approvedAt = status === 'approved' ? Date.now() : null;
+    const stmt = localDb.prepare('UPDATE content_history SET status = ?, approved_at = ? WHERE id = ?');
+    stmt.run(status, approvedAt, id);
+  } catch (e) {
+    console.error('updateContentStatus error:', e);
+  }
+}
+
+export function getPendingContent(): ContentHistoryRow[] {
+  try {
+    const stmt = localDb.prepare(
+      'SELECT * FROM content_history ORDER BY created_at DESC LIMIT 10'
+    );
+    return stmt.all() as ContentHistoryRow[];
+  } catch (e) {
+    console.error('getPendingContent error:', e);
+    return [];
   }
 }
 

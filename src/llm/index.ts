@@ -24,6 +24,72 @@ const anthropicClient = config.ANTHROPIC_API_KEY
 const ANTHROPIC_SONNET = 'claude-sonnet-4-5';
 const ANTHROPIC_HAIKU  = 'claude-haiku-4-5-20251001';
 
+// ── Intent Types ───────────────────────────────────────────────
+type TaskIntent = 'operational' | 'creative' | 'search';
+
+// Keyword heuristics — fallback when Haiku classification fails
+const SEARCH_KEYWORDS = [
+    'buscá', 'busca', 'investigá', 'investiga', 'noticias', 'qué pasó',
+    'que paso', 'información sobre', 'informacion sobre',
+];
+
+const CREATIVE_KEYWORDS = [
+    'redactá', 'redacta', 'escribí', 'escribi', 'contenido', 'post',
+    'email', 'propuesta', 'instagram', 'facebook',
+];
+
+function keywordClassify(messages: Message[]): TaskIntent {
+    const lastUser = [...messages].reverse().find(m => m.role === 'user');
+    if (!lastUser) return 'operational';
+
+    // Vision/document tasks → creative
+    if (lastUser.images?.length || lastUser.documents?.length) return 'creative';
+
+    const text = typeof lastUser.content === 'string' ? lastUser.content.toLowerCase() : '';
+
+    if (SEARCH_KEYWORDS.some(kw => text.includes(kw))) return 'search';
+    if (CREATIVE_KEYWORDS.some(kw => text.includes(kw))) return 'creative';
+
+    return 'operational';
+}
+
+async function classifyIntent(messages: Message[]): Promise<TaskIntent> {
+    if (!anthropicClient) return keywordClassify(messages);
+
+    const lastUser = [...messages].reverse().find(m => m.role === 'user');
+    if (!lastUser) return 'operational';
+
+    const userText = typeof lastUser.content === 'string' ? lastUser.content : '';
+
+    try {
+        const response = await anthropicClient.messages.create({
+            model: ANTHROPIC_HAIKU,
+            max_tokens: 10,
+            messages: [{
+                role: 'user',
+                content: `Classify this user message into exactly one category: operational, creative, or search.\nReturn only the category word, nothing else.\n\nMessage: "${userText}"`,
+            }],
+        });
+
+        const raw = response.content
+            .filter((b: any) => b.type === 'text')
+            .map((b: any) => b.text)
+            .join('')
+            .trim()
+            .toLowerCase();
+
+        if (raw === 'operational' || raw === 'creative' || raw === 'search') {
+            return raw as TaskIntent;
+        }
+
+        // Haiku returned something unexpected — fall through to keyword heuristic
+        return keywordClassify(messages);
+    } catch {
+        // Silent fallback — classification errors must never break the flow
+        return keywordClassify(messages);
+    }
+}
+
 // Keywords that always require Sonnet
 const SONNET_KEYWORDS = [
     'redactá', 'redacta', 'escribí', 'escribi', 'propuesta', 'presupuesto',
@@ -200,10 +266,10 @@ function convertMessagesForAnthropic(messages: Message[]) {
 }
 
 // ── Anthropic Completion (PRIMARY) ─────────────────────────────
-async function anthropicCompletion(messages: Message[], tools?: Tool[]): Promise<CompletionResult> {
+async function anthropicCompletion(messages: Message[], tools?: Tool[], forceModel?: string): Promise<CompletionResult> {
     if (!anthropicClient) throw new Error('Anthropic not configured');
 
-    const model = selectAnthropicModel(messages, tools);
+    const model = forceModel ?? selectAnthropicModel(messages, tools);
     const inputTokens = messages.reduce((acc, m) => acc + (typeof m.content === 'string' ? m.content.length / 4 : 0), 0);
     console.log(`🧠 Provider: Anthropic (${model}) | ~${Math.round(inputTokens)} tokens`);
 
@@ -437,10 +503,58 @@ async function openRouterCompletion(messages: Message[], tools?: Tool[]): Promis
 // ── Main Completion ────────────────────────────────────────────
 export async function getCompletion(messages: Message[], tools?: Tool[]): Promise<CompletionResult> {
     const primary = config.PRIMARY_PROVIDER || 'groq';
+    const routingMode = config.ROUTING_MODE ?? 'smart';
 
     const result = await pRetry(async () => {
-        if (primary === 'anthropic') {
-            // Legacy mode: Anthropic first (quality-first, higher cost)
+        // ── Smart routing (default) ────────────────────────────
+        if (routingMode === 'smart') {
+            const intent = await classifyIntent(messages);
+            console.log(`🎯 Intent: ${intent} → ${intent === 'creative' ? 'Claude Sonnet' : intent === 'search' ? 'Gemini Flash' : 'Groq'}`);
+
+            if (intent === 'creative') {
+                // Creative: Claude Sonnet always (quality writing, vision, proposals)
+                if (anthropicClient) {
+                    try { return await anthropicCompletion(messages, tools, ANTHROPIC_SONNET); }
+                    catch (e: any) { console.error('⚠️ Anthropic (creative) error, falling back to Groq:', e?.message); }
+                }
+                // Fallback chain: Groq → Gemini → OpenRouter
+                try { return await groqCompletion(messages, tools); }
+                catch (e: any) { console.error('⚠️ Groq fallback error, trying Gemini:', e?.message); }
+                if (geminiClient) {
+                    try { return await geminiCompletion(messages, tools); }
+                    catch (e: any) { console.error('⚠️ Gemini fallback error, trying OpenRouter:', e?.message); }
+                }
+
+            } else if (intent === 'search') {
+                // Search: Gemini Flash (Google grounding, web research)
+                if (geminiClient) {
+                    try { return await geminiCompletion(messages, tools); }
+                    catch (e: any) { console.error('⚠️ Gemini (search) error, falling back to Groq:', e?.message); }
+                }
+                // Fallback chain: Groq → Anthropic → OpenRouter
+                try { return await groqCompletion(messages, tools); }
+                catch (e: any) { console.error('⚠️ Groq fallback error, trying Anthropic:', e?.message); }
+                if (anthropicClient) {
+                    try { return await anthropicCompletion(messages, tools); }
+                    catch (e: any) { console.error('⚠️ Anthropic fallback error, trying OpenRouter:', e?.message); }
+                }
+
+            } else {
+                // Operational: Groq (fast, free, tool calls, calendar, leads)
+                try { return await groqCompletion(messages, tools); }
+                catch (e: any) { console.error('⚠️ Groq (operational) error, falling back to Gemini:', e?.message); }
+                if (geminiClient) {
+                    try { return await geminiCompletion(messages, tools); }
+                    catch (e: any) { console.error('⚠️ Gemini fallback error, trying Anthropic:', e?.message); }
+                }
+                if (anthropicClient) {
+                    try { return await anthropicCompletion(messages, tools); }
+                    catch (e: any) { console.error('⚠️ Anthropic fallback error, trying OpenRouter:', e?.message); }
+                }
+            }
+
+        } else if (primary === 'anthropic') {
+            // ── Legacy mode: Anthropic first (quality-first, higher cost) ──
             if (anthropicClient) {
                 try { return await anthropicCompletion(messages, tools); }
                 catch (e: any) { console.error('⚠️ Anthropic error, falling back to Gemini:', e?.message); }
@@ -451,8 +565,9 @@ export async function getCompletion(messages: Message[], tools?: Tool[]): Promis
             }
             try { return await groqCompletion(messages, tools); }
             catch (e: any) { console.error('⚠️ Groq error, falling back to OpenRouter:', e?.message); }
+
         } else {
-            // Default: cost-optimized chain — Groq → Gemini → Anthropic
+            // ── ROUTING_MODE=groq: cost-optimized chain — Groq → Gemini → Anthropic ──
             try { return await groqCompletion(messages, tools); }
             catch (e: any) { console.error('⚠️ Groq error, falling back to Gemini:', e?.message); }
 

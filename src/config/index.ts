@@ -37,6 +37,8 @@ const configSchema = z.object({
     MEMORY_MAX_EMBEDDINGS: z.string().default('500').transform(Number),
     // LLM routing: 'groq' (default, cost-optimized) | 'anthropic' (legacy, quality-first)
     PRIMARY_PROVIDER: z.enum(['groq', 'anthropic', 'gemini']).default('groq'),
+    // Smart routing mode: 'smart' (task-based, default) | 'groq' (all Groq, old behavior)
+    ROUTING_MODE: z.enum(['smart', 'groq']).default('smart'),
 });
 
 const parsedConfig = configSchema.safeParse(process.env);

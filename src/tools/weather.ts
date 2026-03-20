@@ -5,6 +5,10 @@ import axios from 'axios';
 // WEATHER — wttr.in (free, no API key)
 // ═══════════════════════════════════════════════════════════════
 
+// In-memory cache: city → { data, expiresAt }
+const weatherCache = new Map<string, { data: string; expiresAt: number }>();
+const WEATHER_TTL_MS = 10 * 60 * 1000; // 10 minutes
+
 registerTool({
     definition: {
         type: 'function',
@@ -25,6 +29,10 @@ registerTool({
     },
     execute: async (args) => {
         try {
+            const cacheKey = args.city.toLowerCase().trim();
+            const cached = weatherCache.get(cacheKey);
+            if (cached && Date.now() < cached.expiresAt) return cached.data;
+
             // Get detailed weather in JSON format
             const response = await axios.get(`https://wttr.in/${encodeURIComponent(args.city)}?format=j1`, {
                 headers: { 'User-Agent': 'OpenGravity/1.0' },
@@ -58,6 +66,7 @@ registerTool({
                 }
             }
 
+            weatherCache.set(cacheKey, { data: result, expiresAt: Date.now() + WEATHER_TTL_MS });
             return result;
         } catch (error: any) {
             return `Error obteniendo el clima: ${error.message}`;

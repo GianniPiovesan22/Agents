@@ -25,7 +25,14 @@ interface YahooQuote {
     currency?: string;
 }
 
+// In-memory cache: symbol → { data, expiresAt }
+const stockCache = new Map<string, { data: { symbol: string; quote: YahooQuote | null; error?: string }; expiresAt: number }>();
+const STOCK_TTL_MS = 10 * 60 * 1000; // 10 minutes
+
 async function fetchSymbol(symbol: string): Promise<{ symbol: string; quote: YahooQuote | null; error?: string }> {
+    const cached = stockCache.get(symbol);
+    if (cached && Date.now() < cached.expiresAt) return cached.data;
+
     try {
         const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}`;
         const response = await axios.get(url, {
@@ -41,7 +48,7 @@ async function fetchSymbol(symbol: string): Promise<{ symbol: string; quote: Yah
             return { symbol, quote: null, error: 'Sin datos' };
         }
 
-        return {
+        const result = {
             symbol,
             quote: {
                 regularMarketPrice: meta.regularMarketPrice,
@@ -52,6 +59,8 @@ async function fetchSymbol(symbol: string): Promise<{ symbol: string; quote: Yah
                 currency: meta.currency,
             },
         };
+        stockCache.set(symbol, { data: result, expiresAt: Date.now() + STOCK_TTL_MS });
+        return result;
     } catch (error: any) {
         return { symbol, quote: null, error: error.message };
     }

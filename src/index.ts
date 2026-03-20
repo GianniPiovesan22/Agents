@@ -2,11 +2,12 @@ import { startBot } from './bot/index.js';
 import { createWhatsAppServer } from './whatsapp/index.js';
 import { config } from './config/index.js';
 import cron from 'node-cron';
-import { getPendingReminders, markReminderSent, getRecurringReminders, updateReminderNextFire, getUpcomingHighImpactEvents, markForexEventNotified, saveForexEvents, ForexEvent, getStaleLeads } from './database/index.js';
+import { getPendingReminders, markReminderSent, getRecurringReminders, updateReminderNextFire, getUpcomingHighImpactEvents, markForexEventNotified, saveForexEvents, ForexEvent, getStaleLeads, getRecentContentTypes } from './database/index.js';
 import { bot } from './bot/index.js';
 import { sendDailyDigest } from './agent/daily_digest.js';
 import { sendWeeklyDigest } from './agent/weekly_digest.js';
 import { checkProactiveAlerts } from './agent/proactive_alerts.js';
+import { executeTool } from './tools/index.js';
 import axios from 'axios';
 
 /**
@@ -97,20 +98,41 @@ async function main() {
 
         // Daily Digest Setup (runs at 08:30 AM Buenos Aires time)
         cron.schedule('30 8 * * *', async () => {
-            await sendDailyDigest();
+            try {
+                await sendDailyDigest();
+            } catch (e: any) {
+                console.error("Daily Digest cron error:", e.message);
+                for (const userId of config.TELEGRAM_ALLOWED_USER_IDS) {
+                    bot.api.sendMessage(userId, `⚠️ *Error en tarea programada \\[Daily Digest\\]:* ${e.message}`, { parse_mode: 'MarkdownV2' }).catch(() => {});
+                }
+            }
         }, { timezone: 'America/Argentina/Buenos_Aires' });
         console.log("🌅 Cron job for Daily Digest initialized (08:30 AM ART)");
 
         // Weekly Digest Setup (runs every Friday at 9:00 PM Buenos Aires time)
         cron.schedule('0 21 * * 5', async () => {
-            await sendWeeklyDigest();
+            try {
+                await sendWeeklyDigest();
+            } catch (e: any) {
+                console.error("Weekly Digest cron error:", e.message);
+                for (const userId of config.TELEGRAM_ALLOWED_USER_IDS) {
+                    bot.api.sendMessage(userId, `⚠️ *Error en tarea programada \\[Weekly Digest\\]:* ${e.message}`, { parse_mode: 'MarkdownV2' }).catch(() => {});
+                }
+            }
         }, { timezone: 'America/Argentina/Buenos_Aires' });
         console.log("📅 Cron job for Weekly Digest initialized (Friday 09:00 PM ART)");
 
         // Proactive Alerts (runs every 5 minutes)
         cron.schedule('*/5 * * * *', async () => {
-            for (const userId of config.TELEGRAM_ALLOWED_USER_IDS) {
-                await checkProactiveAlerts(userId);
+            try {
+                for (const userId of config.TELEGRAM_ALLOWED_USER_IDS) {
+                    await checkProactiveAlerts(userId);
+                }
+            } catch (e: any) {
+                console.error("Proactive Alerts cron error:", e.message);
+                for (const userId of config.TELEGRAM_ALLOWED_USER_IDS) {
+                    bot.api.sendMessage(userId, `⚠️ *Error en tarea programada \\[Proactive Alerts\\]:* ${e.message}`, { parse_mode: 'MarkdownV2' }).catch(() => {});
+                }
             }
         });
         console.log("🔔 Cron job for Proactive Alerts initialized (every 5 minutes)");
@@ -182,6 +204,9 @@ async function main() {
                 }
             } catch (e: any) {
                 console.error("Forex calendar daily refresh error:", e.message);
+                for (const userId of config.TELEGRAM_ALLOWED_USER_IDS) {
+                    bot.api.sendMessage(userId, `⚠️ *Error en tarea programada \\[Forex Calendar Refresh\\]:* ${e.message}`, { parse_mode: 'MarkdownV2' }).catch(() => {});
+                }
             }
         }, { timezone: 'America/Argentina/Buenos_Aires' });
         console.log("📈 Cron job for Forex calendar daily refresh initialized (07:00 AM ART)");
@@ -208,9 +233,105 @@ async function main() {
                 }
             } catch (e: any) {
                 console.error("Stale leads cron error:", e.message);
+                for (const userId of config.TELEGRAM_ALLOWED_USER_IDS) {
+                    bot.api.sendMessage(userId, `⚠️ *Error en tarea programada \\[Stale Leads\\]:* ${e.message}`, { parse_mode: 'MarkdownV2' }).catch(() => {});
+                }
             }
         }, { timezone: 'America/Argentina/Buenos_Aires' });
         console.log("🎯 Cron job for stale leads follow-up initialized (09:00 AM ART)");
+
+        // Social Content Suggestion — every Monday at 08:00 AM ART
+        const CONTENT_TYPES = ['product', 'testimonial', 'market_info', 'seasonal'] as const;
+        cron.schedule('0 8 * * 1', async () => {
+            try {
+                // Pick content type based on week-of-year mod 4 (simple rotation),
+                // but skip any type already used in the last 3 weeks
+                const now = new Date();
+                const startOfYear = new Date(now.getFullYear(), 0, 1);
+                const weekNumber = Math.ceil(((now.getTime() - startOfYear.getTime()) / 86400000 + startOfYear.getDay() + 1) / 7);
+                const recentTypes = new Set(getRecentContentTypes(21));
+                let contentType = CONTENT_TYPES[weekNumber % 4];
+                if (recentTypes.has(contentType)) {
+                    const fallback = CONTENT_TYPES.find(t => !recentTypes.has(t));
+                    if (fallback) contentType = fallback;
+                }
+
+                const contentTypeLabels: Record<string, string> = {
+                    product: 'Showcase de producto',
+                    testimonial: 'Testimonio de cliente',
+                    market_info: 'Info del mercado agro',
+                    seasonal: 'Contenido estacional',
+                };
+
+                console.log(`📱 Generando sugerencia de contenido semanal (tipo: ${contentType})...`);
+
+                // Generate content via tool
+                const contentResult = await executeTool('generate_social_content', {
+                    platform: 'both',
+                    content_type: contentType,
+                });
+
+                let copy = '';
+                let hashtags = '';
+                let bestTime = 'Martes o Miércoles 9-11hs';
+                let platformNotes = '';
+                let imagePrompt = 'Professional Argentine agricultural machinery, silo bag sealer in field, golden pampas landscape, photorealistic';
+
+                try {
+                    const parsed = JSON.parse(contentResult);
+                    copy = parsed.copy ?? contentResult;
+                    hashtags = Array.isArray(parsed.hashtags)
+                        ? parsed.hashtags.map((h: string) => `#${h.replace(/^#/, '')}`).join(' ')
+                        : '';
+                    bestTime = parsed.best_time ?? bestTime;
+                    platformNotes = parsed.platform_notes ?? '';
+                    imagePrompt = parsed.image_prompt ?? imagePrompt;
+                } catch {
+                    copy = contentResult;
+                }
+
+                // Generate image
+                let imgPath: string | null = null;
+                try {
+                    const imageResult = await executeTool('generate_image', { prompt: imagePrompt });
+                    const imgMatch = imageResult.match(/\[IMG:(.+?)\]/);
+                    if (imgMatch) imgPath = imgMatch[1];
+                } catch (imgErr: any) {
+                    console.error('📱 Error generando imagen para sugerencia semanal:', imgErr.message);
+                }
+
+                const notesLine = platformNotes ? `\n💡 *Nota:* ${platformNotes}` : '';
+                const message = `📱 *Contenido sugerido para esta semana*\n\n*Plataforma:* Facebook \\+ Instagram\n*Tipo:* ${contentTypeLabels[contentType]}\n\n*📝 Copy:*\n${copy}\n\n*🏷️ Hashtags:*\n${hashtags}\n\n*🕐 Mejor horario:* ${bestTime}${notesLine}\n\nRespondé:\n✅ *"publicar"* — lo guardamos listo\n✏️ *"ajustá \\[lo que quieras cambiar\\]"* — lo refinamos\n🔄 *"nuevo"* — generamos otro`;
+
+                for (const userId of config.TELEGRAM_ALLOWED_USER_IDS) {
+                    try {
+                        if (imgPath) {
+                            const { InputFile } = await import('grammy');
+                            const fs = await import('fs');
+                            await bot.api.sendPhoto(userId, new InputFile(imgPath), {
+                                caption: message,
+                                parse_mode: 'MarkdownV2',
+                            });
+                            if (fs.existsSync(imgPath)) fs.unlinkSync(imgPath);
+                        } else {
+                            await bot.api.sendMessage(userId, message, { parse_mode: 'MarkdownV2' });
+                        }
+                    } catch (sendErr: any) {
+                        console.error(`📱 Error enviando sugerencia de contenido a ${userId}:`, sendErr.message);
+                        // Fallback: send plain text without MarkdownV2
+                        try {
+                            await bot.api.sendMessage(userId, `Sugerencia de contenido semanal (${contentTypeLabels[contentType]}):\n\n${copy}\n\nHashtags: ${hashtags}\nHorario: ${bestTime}`);
+                        } catch {}
+                    }
+                }
+            } catch (e: any) {
+                console.error("Social Content cron error:", e.message);
+                for (const userId of config.TELEGRAM_ALLOWED_USER_IDS) {
+                    bot.api.sendMessage(userId, `⚠️ *Error en tarea programada \\[Sugerencia de Contenido\\]:* ${e.message}`, { parse_mode: 'MarkdownV2' }).catch(() => {});
+                }
+            }
+        }, { timezone: 'America/Argentina/Buenos_Aires' });
+        console.log("📱 Cron job for Social Content suggestion initialized (Monday 08:00 AM ART)");
 
     } catch (error) {
         console.error("Critical failure during startup:", error);
