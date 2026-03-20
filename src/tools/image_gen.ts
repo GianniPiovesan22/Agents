@@ -6,7 +6,7 @@ import path from 'path';
 import os from 'os';
 
 // ═══════════════════════════════════════════════════════════════
-// IMAGE GENERATION — Imagen 4 (primary) / Pollinations.ai (fallback)
+// IMAGE GENERATION — Imagen 3 → Imagen 4 (primary) / Pollinations.ai (fallback)
 // ═══════════════════════════════════════════════════════════════
 
 registerTool({
@@ -28,27 +28,33 @@ registerTool({
         },
     },
     execute: async (args) => {
-        // ── Primary: Imagen 4 ──────────────────────────────────
+        // ── Primary: Imagen (3 first, then 4) ─────────────────
         if (geminiClient) {
-            try {
-                console.log(`🖼️ Generating image via Imagen 4...`);
-                const response = await geminiClient.models.generateImages({
-                    model: 'imagen-4.0-generate-001',
-                    prompt: args.prompt,
-                    config: { numberOfImages: 1 },
-                });
+            const IMAGEN_MODELS = ['imagen-3.0-generate-002', 'imagen-4.0-generate-001'];
+            for (const model of IMAGEN_MODELS) {
+                try {
+                    console.log(`🖼️ Generating image via ${model}...`);
+                    const response = await geminiClient.models.generateImages({
+                        model,
+                        prompt: args.prompt,
+                        config: { numberOfImages: 1 },
+                    });
 
-                const imageData = response.generatedImages?.[0]?.image?.imageBytes;
-                if (!imageData) throw new Error('No image returned');
+                    const imageBytes = response.generatedImages?.[0]?.image?.imageBytes
+                                    || response.generatedImages?.[0]?.image?.bytesBase64Encoded;
+                    if (!imageBytes) continue;
 
-                const buffer = Buffer.from(imageData, 'base64');
-                const tempPath = path.join(os.tmpdir(), `img_${Date.now()}.jpg`);
-                fs.writeFileSync(tempPath, buffer);
-                console.log(`🖼️ Image saved to ${tempPath}`);
-                return `[IMG:${tempPath}]`;
-            } catch (imagenError: any) {
-                console.error('⚠️ Imagen 4 failed, falling back to Pollinations:', imagenError.message);
+                    const buffer = Buffer.from(imageBytes, 'base64');
+                    const tempPath = path.join(os.tmpdir(), `img_${Date.now()}.jpg`);
+                    fs.writeFileSync(tempPath, buffer);
+                    console.log(`🖼️ Image generated via ${model}`);
+                    return `[IMG:${tempPath}]`;
+                } catch (e: any) {
+                    console.error(`⚠️ ${model} failed: ${e?.message}`);
+                    // continue to next model
+                }
             }
+            console.warn('⚠️ All Imagen models failed, falling back to Pollinations...');
         }
 
         // ── Fallback: Pollinations.ai ──────────────────────────
