@@ -18,6 +18,7 @@ import '../tools/forex_factory.js';
 import '../tools/stocks.js';
 import '../tools/leads.js';
 import '../tools/instagram_content.js';
+import '../tools/brescopack.js';
 
 const MAX_ITERATIONS = 3;
 
@@ -116,6 +117,9 @@ You have access to the following tools to help the user:
 
 **Contenido para redes:**
 - generate_social_content: Generar contenido completo (copy + prompt de imagen + hashtags + horario) para Facebook e/o Instagram de BrescoPack. Usá este tool cuando el usuario pida contenido para redes, un post, o cuando llegue el cron de sugerencia semanal.
+
+**BrescoPack:**
+- get_brescopack_info: Información completa de BrescoPack: productos, specs técnicas, mercado, preguntas frecuentes y contactos. Usalo cuando el usuario pregunte sobre productos, precios, specs, cómo armar una propuesta comercial, o cuando necesites responder una consulta de cliente.
 
 **User Memory:**
 - remember_about_user: Save facts or preferences about the user for future conversations
