@@ -126,7 +126,7 @@ El copy debe ser específico, con gancho inicial potente, y terminar con llamada
           const historyId = saveContentHistory({
             platform,
             content_type: contentType,
-            topic: topic ?? null,
+            topic: topic ?? undefined,
             copy: parsed.copy ?? '',
             image_prompt: parsed.image_prompt ?? null,
             hashtags: hashtagsStr,

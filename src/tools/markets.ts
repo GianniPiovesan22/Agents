@@ -266,7 +266,9 @@ registerTool({
         }
 
         if (!found) {
-            result += 'No se pudieron parsear los precios de la fuente. El formato puede haber cambiado.\n';
+            // Parsing failed — return raw excerpt so the LLM can interpret it directly
+            const excerpt = markdown.slice(0, 3000).trim();
+            return `🌾 Pizarra ${sourceName} — ${dateStr}\n\n⚠️ No se pudo parsear automáticamente. Datos crudos de la fuente:\n\n${excerpt}`;
         }
 
         result += `\n🕐 Actualizado: ${now}`;

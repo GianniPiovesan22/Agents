@@ -1,6 +1,7 @@
 import { registerTool } from './index.js';
 import { config } from '../config/index.js';
 import { saveLead, getLeads, searchLeads, updateLeadStatus, deleteLead, getStaleLeads } from '../database/index.js';
+import { getCompletion } from '../llm/index.js';
 import axios from 'axios';
 
 // ═══════════════════════════════════════════════════════════════
@@ -217,37 +218,57 @@ registerTool({
       return `No pude extraer contenido de ${url}.`;
     }
 
-    const emails = extractEmails(markdown);
-    const phones = extractPhones(markdown);
+    // Use LLM to extract structured leads from markdown — much more reliable than regex
+    const excerpt = markdown.slice(0, 12000);
+    const prompt = `Analizá el siguiente contenido de una página web y extraé todos los contactos/empresas que encuentres.
 
-    // Try to extract company names: lines that look like headings or bold text
-    const companyRegex = /^(?:#{1,3}\s+|[*_]{1,2})(.{5,80})(?:[*_]{0,2})\s*$/gm;
-    const companyMatches: string[] = [];
-    let m: RegExpExecArray | null;
-    while ((m = companyRegex.exec(markdown)) !== null) {
-      const candidate = m[1].trim();
-      if (candidate && !candidate.startsWith('http') && companyMatches.length < 30) {
-        companyMatches.push(candidate);
+Devolvé ÚNICAMENTE un JSON válido con este formato (sin texto extra, sin markdown):
+[
+  {
+    "company_name": "Nombre de la empresa",
+    "email": "email@ejemplo.com o null",
+    "phone": "teléfono o null",
+    "website": "URL del sitio o null",
+    "contact_name": "nombre del contacto o null"
+  }
+]
+
+Si no encontrás ningún contacto útil, devolvé: []
+
+Contenido de la página:
+${excerpt}`;
+
+    let leads: Array<{ company_name: string; email?: string; phone?: string; website?: string; contact_name?: string }> = [];
+
+    try {
+      const llmResponse = await getCompletion([{ role: 'user', content: prompt }]);
+      const raw = (llmResponse.content ?? '').trim();
+      const jsonMatch = raw.match(/\[[\s\S]*\]/);
+      if (jsonMatch) {
+        const parsed = JSON.parse(jsonMatch[0]);
+        if (Array.isArray(parsed)) leads = parsed.slice(0, 30);
       }
+    } catch (e: any) {
+      console.error('LLM lead extraction error:', e.message);
+      // Fallback: at least save emails found via regex
+      const emails = extractEmails(markdown);
+      const hostname = new URL(url.startsWith('http') ? url : `https://${url}`).hostname;
+      leads = emails.slice(0, 10).map(email => ({ company_name: email.split('@')[1] ?? hostname, email }));
     }
 
-    // Build leads by pairing company names with extracted contact info
-    // Each unique company gets its own lead; leftover emails/phones go to generic leads
+    if (leads.length === 0) {
+      return `No encontré contactos útiles en ${url}.`;
+    }
+
     const saved: number[] = [];
-    const maxToSave = Math.max(companyMatches.length, emails.length, 1);
-
-    for (let i = 0; i < maxToSave && i < 30; i++) {
-      const companyName = companyMatches[i] ?? (emails[i] ? emails[i].split('@')[1] : `Contacto desde ${new URL(url.startsWith('http') ? url : `https://${url}`).hostname}`);
-      const email = emails[i] ?? undefined;
-      const phone = phones[i] ?? undefined;
-
-      if (!email && !phone && !companyMatches[i]) continue;
-
+    for (const lead of leads) {
+      if (!lead.company_name && !lead.email && !lead.phone) continue;
       const id = saveLead({
-        company_name: companyName,
-        email,
-        phone,
-        website: url,
+        company_name: lead.company_name ?? 'Sin nombre',
+        email: lead.email ?? undefined,
+        phone: lead.phone ?? undefined,
+        website: lead.website ?? url,
+        contact_name: lead.contact_name ?? undefined,
         industry,
         source: 'web_scrape',
         status: 'nuevo',

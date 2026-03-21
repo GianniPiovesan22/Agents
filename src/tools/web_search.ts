@@ -1,11 +1,9 @@
 import { registerTool } from './index.js';
 import { config } from '../config/index.js';
-import { GoogleGenAI } from '@google/genai';
-
-const ai = config.GEMINI_API_KEY ? new GoogleGenAI({ apiKey: config.GEMINI_API_KEY }) : null;
+import axios from 'axios';
 
 // ═══════════════════════════════════════════════════════════════
-// WEB SEARCH — Google Search Grounding via Gemini
+// WEB SEARCH — Tavily (primary)
 // ═══════════════════════════════════════════════════════════════
 
 registerTool({
@@ -27,26 +25,29 @@ registerTool({
         },
     },
     execute: async (args) => {
-        if (!ai) return 'Error: Gemini API not configured. Set GEMINI_API_KEY.';
+        if (!config.TAVILY_API_KEY) return 'Error: Tavily API not configured. Set TAVILY_API_KEY.';
 
         try {
-            const response = await ai.models.generateContent({
-                model: 'gemini-2.5-flash',
-                contents: [{ role: 'user', parts: [{ text: args.query }] }],
-                config: {
-                    tools: [{ googleSearch: {} }],
+            console.log(`🌐 Searching web via Tavily: ${args.query}`);
+            const response = await axios.post(
+                'https://api.tavily.com/search',
+                {
+                    api_key: config.TAVILY_API_KEY,
+                    query: args.query,
+                    search_depth: 'basic',
+                    max_results: 5,
+                    include_answer: true,
                 },
-            });
+                { timeout: 15000 }
+            );
 
-            let result = response.text || 'No results found.';
+            const data = response.data;
+            let result = data.answer || 'No answer found.';
 
-            // Append grounding sources if available
-            const groundingMeta = (response as any).candidates?.[0]?.groundingMetadata;
-            if (groundingMeta?.groundingChunks?.length > 0) {
-                const sources = groundingMeta.groundingChunks
-                    .filter((c: any) => c.web?.uri)
+            if (data.results?.length > 0) {
+                const sources = data.results
                     .slice(0, 5)
-                    .map((c: any, i: number) => `${i + 1}. ${c.web.title || 'Source'}: ${c.web.uri}`)
+                    .map((r: any, i: number) => `${i + 1}. ${r.title || 'Source'}: ${r.url}`)
                     .join('\n');
                 if (sources) {
                     result += `\n\n📎 Fuentes:\n${sources}`;
@@ -60,4 +61,4 @@ registerTool({
     },
 });
 
-console.log('🌐 Web Search tool registered (Google Search Grounding)');
+console.log('🌐 Web Search tool registered (Tavily)');

@@ -330,6 +330,7 @@ bot.on('message:document', async (ctx) => {
 
 // /contenido command — on-demand social content generation
 bot.command('contenido', async (ctx) => {
+    if (!ctx.from) return;
     const userId = ctx.from.id.toString();
     if (!config.TELEGRAM_ALLOWED_USER_IDS.includes(userId)) return;
 
@@ -419,6 +420,7 @@ bot.command('contenido', async (ctx) => {
 
 // /historial command — show recent content history
 bot.command('historial', async (ctx) => {
+    if (!ctx.from) return;
     const userId = ctx.from.id.toString();
     if (!config.TELEGRAM_ALLOWED_USER_IDS.includes(userId)) return;
 
