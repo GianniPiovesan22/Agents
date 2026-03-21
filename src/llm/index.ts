@@ -465,7 +465,7 @@ export async function getEmbedding(text: string): Promise<number[]> {
 
     try {
         const response = await geminiClient.models.embedContent({
-            model: 'text-embedding-004',
+            model: 'gemini-embedding-001',
             contents: text,
         });
         return response.embeddings?.[0]?.values ?? [];
