@@ -1,11 +1,11 @@
 import { registerTool } from './index.js';
-import { exec } from 'child_process';
+import { execFile } from 'child_process';
 import util from 'util';
 import path from 'path';
 import fs from 'fs';
 import { config } from '../config/index.js';
 
-const execPromise = util.promisify(exec);
+const execFilePromise = util.promisify(execFile);
 
 // Security: Only allow safe, read-only commands
 const ALLOWED_COMMANDS = [
@@ -15,8 +15,8 @@ const ALLOWED_COMMANDS = [
     'uname', 'uptime', 'nslookup', 'tracert', 'traceroute',
 ];
 
-// Block dangerous shell operators that could chain commands
-const DANGEROUS_PATTERNS = /[;&|`$(){}[\]<>!\\]|(\bsudo\b)|(\brm\b)|(\bdel\b)|(\bformat\b)|(\bshutdown\b)|(\breboot\b)|(\bkill\b)|(\btaskkill\b)|(\bpowershell\b)|(\bcmd\b)|(\bwget\b)|(\bcurl\b)|(\bnew-object\b)|(\binvoke-\b)|(\bstart-process\b)/i;
+// Block dangerous shell operators that could chain commands (kept as defense-in-depth)
+const DANGEROUS_PATTERNS = /[;&|`$(){}[\]<>!\\]|[\n\r]|(\bsudo\b)|(\brm\b)|(\bdel\b)|(\bformat\b)|(\bshutdown\b)|(\breboot\b)|(\bkill\b)|(\btaskkill\b)|(\bpowershell\b)|(\bcmd\b)|(\bwget\b)|(\bcurl\b)|(\bnew-object\b)|(\binvoke-\b)|(\bstart-process\b)/i;
 
 // Commands that accept file path arguments and must be sandboxed
 const FILE_READ_COMMANDS = ['cat', 'type', 'head', 'tail'];
@@ -75,8 +75,14 @@ registerTool({
 
             console.log(`⚠️ EXECUTING TERMINAL COMMAND: ${args.command}`);
 
-            // Execute command with a timeout so it doesn't hang the bot forever
-            const { stdout, stderr } = await execPromise(args.command, { timeout: 15000 });
+            // Execute with execFile (no shell) to prevent injection via shell interpretation
+            const parts = args.command.trim().split(/\s+/);
+            const cmd = parts[0];
+            const cmdArgs = parts.slice(1);
+            const sandboxDir = path.resolve(config.TERMINAL_SANDBOX_DIR);
+            if (!fs.existsSync(sandboxDir)) fs.mkdirSync(sandboxDir, { recursive: true });
+
+            const { stdout, stderr } = await execFilePromise(cmd, cmdArgs, { timeout: 15000, cwd: sandboxDir });
 
             let output = '';
             if (stdout) output += `STDOUT:\n${stdout.substring(0, 3000)}\n`;

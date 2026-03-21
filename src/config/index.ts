@@ -9,9 +9,9 @@ const configSchema = z.object({
     TELEGRAM_ALLOWED_USER_IDS: z.string().transform((val) => val.split(',').map(id => id.trim())),
     GROQ_API_KEY: z.string().min(1, "GROQ_API_KEY is required"),
     ANTHROPIC_API_KEY: z.string().optional(),
+    GEMINI_API_KEY: z.string().optional(),
     TAVILY_API_KEY: z.string().optional(),
     SERPER_API_KEY: z.string().optional(),
-    GEMINI_API_KEY: z.string().optional(),
     OPENROUTER_API_KEY: z.string().optional(),
     OPENROUTER_MODEL: z.string().default("openrouter/free"),
     DB_PATH: z.string().default("./memory.db"),
@@ -36,7 +36,7 @@ const configSchema = z.object({
     WHATSAPP_ALLOWED_NUMBERS: z.string().optional().transform(val => val ? val.split(',').map(s => s.trim()) : []),
     MEMORY_MAX_EMBEDDINGS: z.string().default('500').transform(Number),
     // LLM routing: 'groq' (default, cost-optimized) | 'anthropic' (legacy, quality-first)
-    PRIMARY_PROVIDER: z.enum(['groq', 'anthropic', 'gemini']).default('groq'),
+    PRIMARY_PROVIDER: z.enum(['groq', 'anthropic']).default('groq'),
     // Smart routing mode: 'smart' (task-based, default) | 'groq' (all Groq, old behavior)
     ROUTING_MODE: z.enum(['smart', 'groq']).default('smart'),
 });

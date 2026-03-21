@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
-    "start": "node dist/index.js"
+    "start": "node dist/index.js",
+    "test": "vitest run"
   },
   "keywords": [],
   "author": "",
@@ -14,7 +15,6 @@
   "type": "module",
   "dependencies": {
     "@anthropic-ai/sdk": "^0.78.0",
-    "@distube/ytdl-core": "^4.16.12",
     "@google/genai": "^1.44.0",
     "@tavily/core": "^0.7.2",
     "axios": "^1.13.6",
@@ -30,7 +30,6 @@
     "grammy": "^1.41.1",
     "groq-sdk": "^0.37.0",
     "node-cron": "^4.2.1",
-    "ollama": "^0.6.3",
     "openai": "^6.27.0",
     "p-retry": "^7.1.1",
     "pdf-parse": "^2.4.5",
@@ -43,6 +42,7 @@
     "@types/node-cron": "^3.0.11",
     "@types/pdf-parse": "^1.1.5",
     "tsx": "^4.21.0",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.0"
   }
 }

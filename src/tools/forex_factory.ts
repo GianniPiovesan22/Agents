@@ -217,3 +217,5 @@ registerTool({
 });
 
 console.log('📈 Forex Factory tools registered (economic calendar + news)');
+
+export { parseForexCalendar } from '../utils/forex-parser.js';

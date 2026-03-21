@@ -1,8 +1,8 @@
 import Groq from 'groq-sdk';
-import { GoogleGenAI, Type } from '@google/genai';
 import { config } from '../config/index.js';
 import OpenAI from 'openai';
 import Anthropic from '@anthropic-ai/sdk';
+import { GoogleGenAI } from '@google/genai';
 import pRetry, { AbortError } from 'p-retry';
 
 // ── Providers ──────────────────────────────────────────────────
@@ -12,13 +12,15 @@ const openRouter = new OpenAI({
     apiKey: config.OPENROUTER_API_KEY,
 });
 
-export const geminiClient = config.GEMINI_API_KEY
-    ? new GoogleGenAI({ apiKey: config.GEMINI_API_KEY })
-    : null;
-
 const anthropicClient = config.ANTHROPIC_API_KEY
     ? new Anthropic({ apiKey: config.ANTHROPIC_API_KEY })
     : null;
+
+const geminiClient = config.GEMINI_API_KEY
+    ? new GoogleGenAI({ apiKey: config.GEMINI_API_KEY })
+    : null;
+
+let embeddingsAvailable = true;
 
 // ── Anthropic Models ───────────────────────────────────────────
 const ANTHROPIC_SONNET = 'claude-sonnet-4-5';
@@ -128,55 +130,7 @@ function selectAnthropicModel(messages: Message[], tools?: Tool[]): string {
     return ANTHROPIC_HAIKU;
 }
 
-// ── Gemini Model Tiers (fallback) ──────────────────────────────
-const GEMINI_MODELS = {
-    fast: 'gemini-2.5-flash',
-    pro: 'gemini-2.5-pro',
-    ultra: 'gemini-2.5-pro',
-} as const;
-
 const GROQ_MODEL = 'llama-3.3-70b-versatile';
-
-// ── Smart Model Router (for Gemini fallback) ───────────────────
-const COMPLEX_KEYWORDS = [
-    // Analysis & reasoning
-    'analizá', 'analiza', 'análisis', 'explicame', 'explicá', 'detallado',
-    'profundidad', 'razona', 'razonamiento', 'por qué', 'porque',
-    // Coding
-    'código', 'programa', 'script', 'función', 'refactorizar', 'debug',
-    'error en el código', 'implementar', 'arquitectura',
-    // Writing & creativity
-    'redactá', 'escribí', 'ensayo', 'artículo', 'informe', 'reporte',
-    'plan de negocios', 'estrategia', 'propuesta',
-    // Research
-    'investigá', 'compará', 'ventajas y desventajas', 'pros y contras',
-    'resumen ejecutivo', 'review',
-    // Math & data
-    'calculá', 'fórmula', 'estadística', 'probabilidad', 'ecuación',
-    // Explicit request for power
-    'usá pro', 'modelo potente', 'pensá bien', 'con detalle', 'a fondo',
-];
-
-function classifyComplexity(messages: Message[]): keyof typeof GEMINI_MODELS {
-    const lastUserMsg = [...messages].reverse().find(m => m.role === 'user');
-    if (!lastUserMsg) return 'fast';
-
-    const text = lastUserMsg.content.toLowerCase();
-    if (text.length < 20) return 'fast';
-
-    const complexityScore = COMPLEX_KEYWORDS.filter(kw => text.includes(kw)).length;
-    const sentenceCount = (text.match(/[.!?]+/g) || []).length + 1;
-    const wordCount = text.split(/\s+/).length;
-
-    let score = complexityScore * 2;
-    if (wordCount > 50) score += 2;
-    if (wordCount > 100) score += 2;
-    if (sentenceCount > 3) score += 1;
-
-    if (score >= 6) return 'ultra';
-    if (score >= 2) return 'pro';
-    return 'fast';
-}
 
 // ── Shared Types ───────────────────────────────────────────────
 export interface Message {
@@ -317,126 +271,7 @@ async function anthropicCompletion(messages: Message[], tools?: Tool[], forceMod
     return { content: textContent, tool_calls: toolCalls };
 }
 
-// ── Gemini Schema Conversion ───────────────────────────────────
-function convertToolsForGemini(tools: Tool[]) {
-    return [{
-        functionDeclarations: tools.map(t => ({
-            name: t.function.name,
-            description: t.function.description,
-            parameters: convertSchemaForGemini(t.function.parameters),
-        })),
-    }];
-}
-
-function convertSchemaForGemini(schema: any): any {
-    if (!schema) return undefined;
-    const converted: any = {};
-
-    if (schema.type === 'object') converted.type = Type.OBJECT;
-    else if (schema.type === 'string') converted.type = Type.STRING;
-    else if (schema.type === 'number' || schema.type === 'integer') converted.type = Type.NUMBER;
-    else if (schema.type === 'boolean') converted.type = Type.BOOLEAN;
-    else if (schema.type === 'array') converted.type = Type.ARRAY;
-
-    if (schema.description) converted.description = schema.description;
-    if (schema.enum) converted.enum = schema.enum;
-    if (schema.required) converted.required = schema.required;
-
-    if (schema.properties) {
-        converted.properties = {};
-        for (const [key, value] of Object.entries(schema.properties)) {
-            converted.properties[key] = convertSchemaForGemini(value);
-        }
-    }
-
-    if (schema.items) {
-        converted.items = convertSchemaForGemini(schema.items);
-    }
-
-    return converted;
-}
-
-function convertMessagesForGemini(messages: Message[]) {
-    const systemInstruction: string[] = [];
-    const contents: any[] = [];
-
-    for (const msg of messages) {
-        if (msg.role === 'system') {
-            systemInstruction.push(msg.content);
-            continue;
-        }
-
-        if (msg.role === 'user') {
-            const parts: any[] = [{ text: msg.content }];
-            if (msg.images) {
-                for (const img of msg.images) {
-                    parts.push({
-                        inlineData: {
-                            data: img.data,
-                            mimeType: img.mimeType
-                        }
-                    });
-                }
-            }
-            contents.push({ role: 'user', parts });
-        } else if (msg.role === 'assistant' || msg.role === 'model') {
-            const parts: any[] = [];
-            if (msg.content) parts.push({ text: msg.content });
-            if (parts.length > 0) contents.push({ role: 'model', parts });
-        } else if (msg.role === 'tool') {
-            contents.push({
-                role: 'user',
-                parts: [{
-                    functionResponse: {
-                        name: msg.name || 'unknown',
-                        response: { result: msg.content },
-                    },
-                }],
-            });
-        }
-    }
-
-    return { systemInstruction: systemInstruction.join('\n\n'), contents };
-}
-
-// ── Gemini Completion (Fallback 1) ─────────────────────────────
-async function geminiCompletion(messages: Message[], tools?: Tool[]): Promise<CompletionResult> {
-    if (!geminiClient) throw new Error('Gemini not configured');
-
-    const tier = classifyComplexity(messages);
-    const model = GEMINI_MODELS[tier];
-    const inputTokens = messages.reduce((acc, m) => acc + (typeof m.content === 'string' ? m.content.length / 4 : 0), 0);
-    console.log(`🧠 Provider: Gemini (${model}, tier: ${tier}) | ~${Math.round(inputTokens)} tokens`);
-
-    const { systemInstruction, contents } = convertMessagesForGemini(messages);
-
-    const geminiConfig: any = {};
-    if (systemInstruction) geminiConfig.systemInstruction = systemInstruction;
-    if (tools && tools.length > 0) geminiConfig.tools = convertToolsForGemini(tools);
-
-    const response = await geminiClient.models.generateContent({
-        model,
-        contents,
-        config: geminiConfig,
-    });
-
-    const textContent = response.text || null;
-    const toolCalls: ToolCallResult[] = [];
-
-    if (response.functionCalls && response.functionCalls.length > 0) {
-        for (const fc of response.functionCalls) {
-            toolCalls.push({
-                id: `gemini_${fc.name}_${Date.now()}`,
-                name: fc.name || '',
-                arguments: fc.args || {},
-            });
-        }
-    }
-
-    return { content: textContent, tool_calls: toolCalls };
-}
-
-// ── Groq Completion (Fallback 2) ───────────────────────────────
+// ── Groq Completion ────────────────────────────────────────────
 async function groqCompletion(messages: Message[], tools?: Tool[]): Promise<CompletionResult> {
     const inputTokens = messages.reduce((acc, m) => acc + (typeof m.content === 'string' ? m.content.length / 4 : 0), 0);
     console.log(`🧠 Provider: Groq (${GROQ_MODEL}) | 🟢 free | ~${Math.round(inputTokens)} tokens`);
@@ -521,47 +356,33 @@ export async function getCompletion(messages: Message[], tools?: Tool[]): Promis
         // ── Smart routing (default) ────────────────────────────
         if (routingMode === 'smart') {
             const intent = await classifyIntent(messages);
-            console.log(`🎯 Intent: ${intent} → ${intent === 'creative' ? 'Claude Sonnet' : intent === 'search' ? 'Gemini Flash' : 'Groq'}`);
+            console.log(`🎯 Intent: ${intent} → ${intent === 'creative' ? 'Claude Sonnet' : intent === 'search' ? 'Groq' : 'Groq'}`);
 
             if (intent === 'creative') {
                 // Creative: Claude Sonnet always (quality writing, vision, proposals)
                 if (anthropicClient) {
                     try { return await anthropicCompletion(messages, tools, ANTHROPIC_SONNET); }
-                    catch (e: any) { console.error('⚠️ Anthropic (creative) error, falling back to Groq:', e?.message); }
-                }
-                // Fallback chain: Groq → Gemini → OpenRouter
-                try { return await groqCompletion(messages, tools); }
-                catch (e: any) { console.error('⚠️ Groq fallback error, trying Gemini:', e?.message); }
-                if (geminiClient) {
-                    try { return await geminiCompletion(messages, tools); }
-                    catch (e: any) { console.error('⚠️ Gemini fallback error, trying OpenRouter:', e?.message); }
+                    catch (e: any) { console.error('⚠️ Anthropic (creative) error, falling back to Haiku:', e?.message); }
+                    try { return await anthropicCompletion(messages, tools, ANTHROPIC_HAIKU); }
+                    catch (e: any) { console.error('⚠️ Anthropic Haiku error, falling back to OpenRouter:', e?.message); }
                 }
 
             } else if (intent === 'search') {
-                // Search: Gemini Flash (Google grounding, web research)
-                if (geminiClient) {
-                    try { return await geminiCompletion(messages, tools); }
-                    catch (e: any) { console.error('⚠️ Gemini (search) error, falling back to Groq:', e?.message); }
-                }
-                // Fallback chain: Groq → Anthropic → OpenRouter
+                // Search: Groq synthesizes (Tavily handles actual search via tool)
                 try { return await groqCompletion(messages, tools); }
-                catch (e: any) { console.error('⚠️ Groq fallback error, trying Anthropic:', e?.message); }
+                catch (e: any) { console.error('⚠️ Groq (search) error, falling back to Haiku:', e?.message); }
                 if (anthropicClient) {
-                    try { return await anthropicCompletion(messages, tools); }
-                    catch (e: any) { console.error('⚠️ Anthropic fallback error, trying OpenRouter:', e?.message); }
+                    try { return await anthropicCompletion(messages, tools, ANTHROPIC_HAIKU); }
+                    catch (e: any) { console.error('⚠️ Anthropic Haiku fallback error, trying OpenRouter:', e?.message); }
                 }
 
             } else {
                 // Operational: Groq (fast, free, tool calls, calendar, leads)
                 try { return await groqCompletion(messages, tools); }
-                catch (e: any) { console.error('⚠️ Groq (operational) error, falling back to Gemini:', e?.message); }
-                if (geminiClient) {
-                    try { return await geminiCompletion(messages, tools); }
-                    catch (e: any) { console.error('⚠️ Gemini fallback error, trying Anthropic:', e?.message); }
-                }
+                catch (e: any) { console.error('⚠️ Groq (operational) error, falling back to Haiku:', e?.message); }
                 if (anthropicClient) {
-                    try { return await anthropicCompletion(messages, tools); }
-                    catch (e: any) { console.error('⚠️ Anthropic fallback error, trying OpenRouter:', e?.message); }
+                    try { return await anthropicCompletion(messages, tools, ANTHROPIC_HAIKU); }
+                    catch (e: any) { console.error('⚠️ Anthropic Haiku fallback error, trying OpenRouter:', e?.message); }
                 }
             }
 
@@ -569,28 +390,19 @@ export async function getCompletion(messages: Message[], tools?: Tool[]): Promis
             // ── Legacy mode: Anthropic first (quality-first, higher cost) ──
             if (anthropicClient) {
                 try { return await anthropicCompletion(messages, tools); }
-                catch (e: any) { console.error('⚠️ Anthropic error, falling back to Gemini:', e?.message); }
-            }
-            if (geminiClient) {
-                try { return await geminiCompletion(messages, tools); }
-                catch (e: any) { console.error('⚠️ Gemini error, falling back to Groq:', e?.message); }
+                catch (e: any) { console.error('⚠️ Anthropic error, falling back to Groq:', e?.message); }
             }
             try { return await groqCompletion(messages, tools); }
             catch (e: any) { console.error('⚠️ Groq error, falling back to OpenRouter:', e?.message); }
 
         } else {
-            // ── ROUTING_MODE=groq: cost-optimized chain — Groq → Gemini → Anthropic ──
+            // ── ROUTING_MODE=groq: cost-optimized chain — Groq → Haiku → OpenRouter ──
             try { return await groqCompletion(messages, tools); }
-            catch (e: any) { console.error('⚠️ Groq error, falling back to Gemini:', e?.message); }
-
-            if (geminiClient) {
-                try { return await geminiCompletion(messages, tools); }
-                catch (e: any) { console.error('⚠️ Gemini error, falling back to Anthropic:', e?.message); }
-            }
+            catch (e: any) { console.error('⚠️ Groq error, falling back to Haiku:', e?.message); }
 
             if (anthropicClient) {
-                try { return await anthropicCompletion(messages, tools); }
-                catch (e: any) { console.error('⚠️ Anthropic error, falling back to OpenRouter:', e?.message); }
+                try { return await anthropicCompletion(messages, tools, ANTHROPIC_HAIKU); }
+                catch (e: any) { console.error('⚠️ Anthropic Haiku error, falling back to OpenRouter:', e?.message); }
             }
         }
 
@@ -643,29 +455,27 @@ export async function transcribeAudio(filePath: string) {
     return response.text;
 }
 
-// Once a 404 is received, stop trying embeddings for the rest of the session
-let embeddingsAvailable = true;
-
 /**
- * Generates an embedding vector for a given text using Gemini.
+ * Generates a text embedding using Google's text-embedding-004 model.
+ * Returns an empty array if no Gemini API key is configured, if embeddings
+ * have been disabled this session (after a 404), or on any error.
  */
 export async function getEmbedding(text: string): Promise<number[]> {
     if (!geminiClient || !embeddingsAvailable) return [];
 
     try {
-        const result = await geminiClient.models.embedContent({
+        const response = await geminiClient.models.embedContent({
             model: 'text-embedding-004',
             contents: text,
         });
-
-        return result.embeddings?.[0]?.values || [];
-    } catch (error: any) {
-        if (error.status === 404 || error.message?.includes('404')) {
+        return response.embeddings?.[0]?.values ?? [];
+    } catch (err: any) {
+        if (err?.status === 404 || err?.message?.includes('404')) {
             embeddingsAvailable = false;
-            console.warn("⚠️ Embeddings not available for this Gemini key — disabling for this session.");
-        } else {
-            console.error("⚠️ Error generating embedding:", error.message || error);
+            console.warn('⚠️ Embeddings unavailable (404) — disabling for this session');
+            return [];
         }
+        console.error('⚠️ getEmbedding error:', err?.message ?? err);
         return [];
     }
 }

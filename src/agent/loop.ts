@@ -10,7 +10,6 @@ import '../tools/notes.js';
 import '../tools/markets.js';
 import '../tools/reminder.js';
 import '../tools/web_scrape.js';
-import '../tools/youtube.js';
 import '../tools/terminal.js';
 import '../tools/github.js';
 import '../tools/browser.js';
@@ -84,7 +83,6 @@ You have access to the following tools to help the user:
 - web_search: Search the internet for current information, news, real-time data
 - scrape_website: Extract clean Markdown content from a specific URL
 - take_screenshot: Takes a visual screenshot of a particular website URL. Useful when the user specifically asks to *see* what a website looks like or wants an image of a webpage.
-- get_youtube_transcript: Extracts full transcript text from a YouTube video URL
 - analyze_github_repo: Reads structure and files from a public GitHub repository
 
 **Image Generation:**
@@ -125,7 +123,7 @@ You have access to the following tools to help the user:
 
 **Utilities:**
 - get_current_time: Get the current local time
-- run_terminal_command: Executes background terminal commands. WARNING: Runs with administrator level access directly on your host operating system. Only use for debugging server issues or listing processes.
+- run_terminal_command: Executes safe, read-only diagnostic commands (ls, ps, df, uptime, etc.). Sandboxed — only allowlisted commands, no shell operators, file access restricted to workspace directory. Use for debugging server issues or checking system state.
 
 Current date/time: ${new Date().toISOString()}
 
@@ -209,6 +207,9 @@ FORMATTING (CRITICAL):
     const isTrivial = lastUserText.length < SIMPLE_THRESHOLD
         && !COMPLEX_KEYWORDS.some(kw => lastUserText.includes(kw));
 
+    // Track previous tool results to avoid redundant repeated calls
+    const toolResultCache = new Map<string, string>();
+
     for (let i = 0; i < MAX_ITERATIONS; i++) {
         // First iteration: no tools for trivial messages (Haiku handles it cheaper)
         const tools = (i === 0 && isTrivial) ? [] : getToolsDefinitions();
@@ -245,7 +246,16 @@ FORMATTING (CRITICAL):
                 args._userId = userId;
             }
 
-            const result = await executeTool(toolCall.name, args);
+            // Deduplicate: if same tool+args was already called, reuse cached result
+            const cacheKey = `${toolCall.name}:${JSON.stringify(args)}`;
+            let result: string;
+            if (toolResultCache.has(cacheKey)) {
+                console.log(`⚡ Tool cache hit: ${toolCall.name} — skipping redundant call`);
+                result = toolResultCache.get(cacheKey)!;
+            } else {
+                result = await executeTool(toolCall.name, args);
+                toolResultCache.set(cacheKey, result);
+            }
 
             messages.push({
                 role: 'tool',
@@ -296,16 +306,4 @@ FORMATTING (CRITICAL):
     return finalContent;
 }
 
-// Helper function for Semantic Search
-function cosineSimilarity(vecA: number[], vecB: number[]): number {
-    let dotProduct = 0;
-    let normA = 0;
-    let normB = 0;
-    for (let i = 0; i < vecA.length; i++) {
-        dotProduct += vecA[i] * vecB[i];
-        normA += vecA[i] * vecA[i];
-        normB += vecB[i] * vecB[i];
-    }
-    if (normA === 0 || normB === 0) return 0;
-    return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
-}
+import { cosineSimilarity } from '../utils/math.js';
